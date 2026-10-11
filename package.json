@@ -1,0 +1,14 @@
+{
+  "name": "classroom-danmaku",
+  "version": "0.1.0",
+  "private": true,
+  "description": "课堂弹幕 —— 把大学课堂变成一场可以发弹幕的直播",
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/check-docs.mjs",
+    "check:docs": "node scripts/check-docs.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
