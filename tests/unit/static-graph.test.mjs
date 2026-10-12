@@ -145,6 +145,10 @@ test("页面脚本里 document 查的 id 都能在 HTML 里找到", () => {
 
     assert.ok(queried.size > 5, `只抓到 ${queried.size} 个 id，检查一下正则`);
     for (const id of queried) {
+      // 只认"像 id 的"东西：HTML 的 id 合法字符很宽，但本仓库的 id 一律是
+      // `[a-z][a-z0-9-]*`。加这一条是因为正则分不出注释和代码 —— 注释里写一句
+      // `getElementById("…")` 当举例，就会被当成查了一个叫「…」的元素。
+      if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(id)) continue;
       assert.ok(ids.has(id), `${html} 的脚本查了 id="${id}"，但页面上没有这个元素`);
     }
   }

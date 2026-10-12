@@ -151,6 +151,53 @@ test("缺 url 或没有 WebSocket 实现时当场报错，而不是等到用的�
   );
 });
 
+test("默认的定时器在真浏览器里可用：window.setTimeout 不能拆出来裸调", () => {
+  /*
+   * 浏览器里的 window.setTimeout 要求 this 就是 window。把它拆出来存进一个
+   * 普通对象（`{ setTimeout: globalThis.setTimeout }`）之后，调用时 this 变成
+   * 那个对象，浏览器抛 TypeError: Illegal invocation。Node 完全不检查 this，
+   * 所以这个 bug 在别的用例里永远是绿的。
+   *
+   * 它曾经真的发生过：每条消息进来都会先 bumpWatchdog（重置看门狗），那一步
+   * 抛异常 → 永远走不到 onEvent → 老师页显示"已连上"但问题池永远空着，
+   * 除了控制台之外没有任何线索。
+   */
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const strict = (name, real) =>
+    function (...args) {
+      if (this !== globalThis) throw new TypeError(`Illegal invocation: ${name}`);
+      return real.apply(globalThis, args);
+    };
+  globalThis.setTimeout = strict("setTimeout", realSetTimeout);
+  globalThis.clearTimeout = strict("clearTimeout", realClearTimeout);
+
+  try {
+    FakeSocket.instances = [];
+    const events = [];
+    // 刻意不传 timers：要测的就是那条默认值
+    const client = createClassroomClient({
+      url: "ws://127.0.0.1:3000/ws",
+      join: { role: "student", classId: "demo" },
+      WebSocketImpl: FakeSocket,
+      onEvent: (message) => events.push(message),
+      logger: { warn() {} },
+    });
+
+    client.open();
+    const socket = FakeSocket.instances.at(-1);
+    socket.connect();
+    socket.deliver({ event: "joined", payload: { deviceId: "d-1" } });
+    socket.deliver({ event: "danmaku:new", payload: { id: "x", text: "你好" } });
+
+    assert.equal(events.length, 2, "消息必须真的走到 onEvent，而不是半路抛异常");
+    client.close();
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+});
+
 test("连上之后立刻 join，第一次不带 deviceId", () => {
   const kit = makeClient();
   assert.equal(kit.client.status, STATUS.IDLE);

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>课堂弹幕 · 老师端</title>
+    <link rel="stylesheet" href="./host.css" />
+  </head>
+  <body>
+    <!--
+      形态一：提醒器（产品文档 §7.3，默认形态，占 90% 的时间）。
+
+      老师一边讲课一边低头看手机观感很差，所以默认只有一个大徽章；
+      达到阈值时震动一下，其余时间老师不用看它。
+    -->
+    <section id="alerter" class="alerter">
+      <button id="badge" class="badge" type="button">
+        <span id="badge-count" class="badge-count">0</span>
+        <span class="badge-text">个待回应</span>
+      </button>
+      <p id="alerter-flash" class="flash" hidden></p>
+      <p id="alerter-status" class="note">连接中…</p>
+      <p id="alerter-stats" class="note"></p>
+      <p class="note">点上面的大徽章展开控制台。</p>
+    </section>
+
+    <!-- 形态二：控制台（产品文档 §7.3） -->
+    <section id="console" class="console" hidden>
+      <header class="bar">
+        <button id="collapse" class="link" type="button">收起</button>
+        <span id="console-status" class="conn">连接中…</span>
+      </header>
+
+      <p id="banner" class="banner" hidden></p>
+
+      <main class="pool-wrap">
+        <h2>待回应</h2>
+        <ul id="pool" class="pool"></ul>
+        <p id="pool-empty" class="note">现在没有待回应的问题。</p>
+
+        <h2 id="done-title" hidden>已回应</h2>
+        <ul id="done" class="pool pool-done"></ul>
+      </main>
+
+      <footer class="actions">
+        <div class="big">
+          <button id="clear" class="big-btn" type="button">清屏</button>
+          <button id="pause" class="big-btn" type="button">暂停</button>
+          <button id="mute" class="big-btn" type="button">静音 5 分钟</button>
+          <button id="pin-hottest" class="big-btn" type="button">置顶最热</button>
+        </div>
+        <p id="stats" class="stats"></p>
+
+        <details id="more" class="more">
+          <summary>更多（手感参数 / 导出）</summary>
+          <p class="note">参数改完立刻在投影上生效。调不准就先用投影那台电脑上的调参页试。</p>
+          <div id="sliders" class="sliders"></div>
+          <div class="row">
+            <button id="config-reset" class="link" type="button">恢复默认参数</button>
+            <button id="export" class="link" type="button">导出这节课的数据</button>
+          </div>
+          <pre id="export-out" class="export-out" hidden></pre>
+        </details>
+      </footer>
+    </section>
+
+    <script type="module" src="./host.js"></script>
+  </body>
+</html>

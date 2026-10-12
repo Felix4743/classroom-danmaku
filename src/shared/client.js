@@ -34,7 +34,21 @@ export function createClassroomClient(options = {}) {
     url,
     join = {},
     WebSocketImpl = globalThis.WebSocket,
-    timers = { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout },
+    /**
+     * 这里必须用箭头函数包一层，不能写成 `{ setTimeout: globalThis.setTimeout }`。
+     *
+     * 浏览器里的 `window.setTimeout` 要求 `this` 就是 `window`。一旦把它拆出来
+     * 存进一个普通对象，调用时 `this` 变成了那个对象，浏览器直接抛
+     * `TypeError: Illegal invocation` —— 而 Node 完全不检查 `this`，
+     * 所以这个 bug 在单元测试里永远是绿的，只在真浏览器里炸。
+     *
+     * 包一层之后 `globalThis.setTimeout(...)` 是以 `globalThis` 为接收者调用的，
+     * 而且每次调用时才取，注入的假定时器也能生效。
+     */
+    timers = {
+      setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
+      clearTimeout: (id) => globalThis.clearTimeout(id),
+    },
     onEvent = () => {},
     onStatus = () => {},
     onReset = () => {},
