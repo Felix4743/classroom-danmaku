@@ -74,25 +74,40 @@ export function overlayBounds(display, level) {
 export function decideLevel(probe = {}) {
   const { visible, transparent, error } = probe;
 
+  /*
+   * 只有**明确证明**透明与置顶都成立，才上 L0。
+   *
+   * 这条规则是踩出来的：早先的写法是"测不出来就照常上 L0"，理由是"自动降级
+   * 只会让观感变差"。但代价是不对称的 —— 猜错的两种后果完全不是一个量级：
+   *   猜错成 L0：一整块黑屏盖住老师的课件，这节课直接上不下去；
+   *   猜错成 L1：弹幕在屏幕底部 25% 的一条带里跑，功能一个不少。
+   * 所以"不确定"必须往 L1 倒，并且把"想全屏透明就手动切"交给托盘。
+   */
   if (error) {
-    // 探测失败**不降级**。自动降级是为了对付"黑屏"这种一眼可见的灾难，
-    // 而探测失败说明我们什么都不知道；把 L0 换成一个明确的 L1 只会让
-    // 观感变差却解决不了任何问题。真正的做法是照常上 L0，同时把
-    // "没测出来，看着不对就手动切" 交给老师。
-    return { level: "L0", reason: `没能探测透明窗口：${error}`, unknown: true };
-  }
-  if (transparent === false) {
     return {
       level: "L1",
-      reason: "透明合成没成功（背景被画成了黑色），已切到底部弹幕带",
-      unknown: false,
+      reason: `没能探测透明浮层（${error}），先用底部弹幕带；想在 PPT 上飘就在托盘里手动切`,
+      unknown: true,
     };
   }
-  if (visible === false) {
+  if (transparent !== true) {
     return {
       level: "L1",
-      reason: "弹幕层浮不到 PPT 上面（PPT 很可能是独占全屏），已切到底部弹幕带",
-      unknown: false,
+      unknown: transparent === null,
+      reason:
+        transparent === false
+          ? "透明合成没成功（背景被画成了黑色），已切到底部弹幕带"
+          : "透明合成没法确认（背后那块本来就是黑的），已切到底部弹幕带",
+    };
+  }
+  if (visible !== true) {
+    return {
+      level: "L1",
+      unknown: visible === null,
+      reason:
+        visible === false
+          ? "弹幕层浮不到 PPT 上面（PPT 很可能是独占全屏），已切到底部弹幕带"
+          : "没能确认弹幕层浮在 PPT 之上，已切到底部弹幕带",
     };
   }
   return { level: "L0", reason: "透明浮层可用", unknown: false };
@@ -126,18 +141,69 @@ export const PROBE_REGIONS = Object.freeze({
   marker: Object.freeze({ xRatio: 0.75, yRatio: 0.5 }),
 });
 
+/**
+ * 验透明的那半边取哪几个点。
+ *
+ * 取多个点不是保险起见，是被现实逼的：判定"透过去了"的唯一依据是
+ * 「我们没画的那块，和探测前一模一样」，可如果那块本来就是黑的，
+ * "透过去看到黑桌面"和"没透明成功的黑底"在像素上完全一样，什么都证不出来。
+ * 单点采样撞上一块黑桌面的概率不低（深色壁纸、黑底的资源管理器窗口），
+ * 多点里挑**最亮**的那个，才有可能找到一块能说话的背景。
+ */
+export const PROBE_CLEAR_POINTS = Object.freeze([
+  Object.freeze({ xRatio: 0.1, yRatio: 0.2 }),
+  Object.freeze({ xRatio: 0.25, yRatio: 0.5 }),
+  Object.freeze({ xRatio: 0.35, yRatio: 0.78 }),
+  Object.freeze({ xRatio: 0.42, yRatio: 0.35 }),
+]);
+
 /** 抓回来的位图是 BGRA（Electron `nativeImage.toBitmap()` 的排布）。 */
 export function samplePixel(bitmap, size, xRatio, yRatio) {
   if (!bitmap || !size || !size.width || !size.height) return null;
   const x = Math.min(size.width - 1, Math.max(0, Math.floor(xRatio * size.width)));
   const y = Math.min(size.height - 1, Math.max(0, Math.floor(yRatio * size.height)));
+  return sampleAt(bitmap, size, x, y);
+}
+
+/** 按位图坐标取一个像素（BGRA）。越界返回 null，绝不读到别人的内存。 */
+export function sampleAt(bitmap, size, x, y) {
+  if (!bitmap || !size || !size.width || !size.height) return null;
+  if (x < 0 || y < 0 || x >= size.width || y >= size.height) return null;
   const i = (y * size.width + x) * 4;
   if (i + 3 >= bitmap.length) return null;
   return { b: bitmap[i], g: bitmap[i + 1], r: bitmap[i + 2], a: bitmap[i + 3] };
 }
 
-/** 多暗算"黑"。低于这个亮度就无法区分"透过去看到的黑桌面"和"没透明成功的黑底"。 */
-export const NEAR_BLACK = 18;
+/**
+ * 多暗算"黑"。
+ *
+ * **必须 ≥ `compareProbeSamples` 的默认容差（40）**，这两个数是一对：
+ * 容差决定了"两个颜色算不算同一个"，那么只要参考色落在容差能碰到纯黑的
+ * 范围内，"它和黑一样"与"它和参考一样"就同时成立，结论必然是假的。
+ * 之前的 18 配着 40 的容差，于是桌面上 rgb(30,32,38) 和窗口里的
+ * rgb(11,13,18) 被判成"一模一样"→ 谎报透明成功 → 全屏黑屏。
+ */
+export const NEAR_BLACK = 56;
+
+/** 一个像素里最大的那个通道，用来判断"它到底有多亮"。 */
+function brightness(pixel) {
+  if (!pixel) return -1;
+  return Math.max(pixel.r, pixel.g, pixel.b);
+}
+
+/** 从几个候选点里挑最亮的那个下标；全空返回 0。 */
+function brightestIndex(pixels) {
+  let best = 0;
+  let bestValue = -1;
+  for (let i = 0; i < pixels.length; i++) {
+    const value = brightness(pixels[i]);
+    if (value > bestValue) {
+      bestValue = value;
+      best = i;
+    }
+  }
+  return best;
+}
 
 /**
  * 把探测前后各一张整屏画面比对成 `decideLevel` 要的三个输入。
@@ -146,18 +212,30 @@ export const NEAR_BLACK = 18;
  *  - 右半边是我们画的洋红：能看见 → 窗口确实浮在了前台窗口之上（否则被 PPT 盖住）。
  *  - 左半边我们什么都没画：和探测前一样 → 透明合成成功（否则是黑底糊在上面）。
  *
- * 左半边有个死结：如果 PPT 本来就是一张纯黑幻灯片，
+ * 左半边有个死结：如果背后本来就是一片黑，
  * "透明成功"和"黑底失败"看起来**一模一样**，这时候如实返回 `null`（测不出来），
- * 交给 `decideLevel` 按"不降级"处理，而不是赌一个结果。
+ * 由 `decideLevel` 按"不确定就退 L1"处理，而不是赌一个结果。
  */
 export function compareProbeSamples(before, after, tolerance = 40) {
   if (!before || !after) {
     return { visible: null, transparent: null, detail: { error: "探测画面缺失" } };
   }
+
   const visible = pixelMatches(after.marker, PROBE_COLOR);
-  const sameAsBefore = pixelMatches(after.clear, before.clear, tolerance);
-  const backgroundIsBlack =
-    !!before.clear && before.clear.r < NEAR_BLACK && before.clear.g < NEAR_BLACK && before.clear.b < NEAR_BLACK;
+
+  /*
+   * 用探测**前**那张图来挑采样点：那时候屏幕上还没有我们任何东西，
+   * 挑出来的必定是"能说明问题"的位置（最亮的背景）。
+   * 探测后那张图必须取**同一个点**，否则比的是两个不同的地方。
+   */
+  const beforeClears = Array.isArray(before.clears) && before.clears.length > 0 ? before.clears : [before.clear];
+  const afterClears = Array.isArray(after.clears) && after.clears.length > 0 ? after.clears : [after.clear];
+  const index = brightestIndex(beforeClears);
+  const ref = beforeClears[index] ?? before.clear;
+  const now = afterClears[index] ?? after.clear;
+
+  const sameAsBefore = pixelMatches(now, ref, tolerance);
+  const backgroundIsBlack = brightness(ref) <= NEAR_BLACK;
 
   let transparent = null;
   if (!sameAsBefore) transparent = false;
@@ -166,15 +244,40 @@ export function compareProbeSamples(before, after, tolerance = 40) {
   return {
     visible,
     transparent,
-    detail: { before, after, sameAsBefore, backgroundIsBlack },
+    detail: { before: ref, after: now, sameAsBefore, backgroundIsBlack, sampleIndex: index },
   };
 }
 
-/** 从一张 `{bitmap, size}` 里取两个采样点。 */
-export function readProbeSample(frame) {
+/**
+ * 从一张 `{bitmap, size}` 里取采样点：右半边的标志点 + 左半边的几个候选点。
+ *
+ * **采样位置相对于窗口，不是相对于整块屏。**
+ * 这一条是踩出来的：探测窗口先按 L1 建（只占屏幕底部 25%），而采样点原本
+ * 按整块屏的 (75%, 50%) 算 —— 那个点落在窗口外面，那里根本没有我们画的东西，
+ * 于是"看不见洋红"→ 误判成"浮不到 PPT 上面"→ 永远升不到 L0。
+ *
+ * @param {{bitmap: Buffer, size: {width: number, height: number}}} frame
+ * @param {object} [options]
+ * @param {{width: number, height: number}} [options.display] 显示屏的逻辑尺寸（抓屏对应的整块屏）
+ * @param {{x: number, y: number, width: number, height: number}} [options.rect] 窗口在**这块屏内**的矩形
+ */
+export function readProbeSample(frame, options = {}) {
   if (!frame) return null;
-  return {
-    clear: samplePixel(frame.bitmap, frame.size, PROBE_REGIONS.clear.xRatio, PROBE_REGIONS.clear.yRatio),
-    marker: samplePixel(frame.bitmap, frame.size, PROBE_REGIONS.marker.xRatio, PROBE_REGIONS.marker.yRatio),
-  };
+  const { bitmap, size } = frame;
+  const display = options.display ?? size;
+  const rect = options.rect ?? { x: 0, y: 0, width: display.width ?? size.width, height: display.height ?? size.height };
+  // 缩略图和整块屏之间的比例：抓屏时按宽度缩过，横竖各算一次更稳
+  const scaleX = size.width / Math.max(1, display.width ?? size.width);
+  const scaleY = size.height / Math.max(1, display.height ?? size.height);
+  const at = (xRatio, yRatio) =>
+    sampleAt(
+      bitmap,
+      size,
+      Math.round((rect.x + xRatio * rect.width) * scaleX),
+      Math.round((rect.y + yRatio * rect.height) * scaleY),
+    );
+
+  const clear = at(PROBE_REGIONS.clear.xRatio, PROBE_REGIONS.clear.yRatio);
+  const clears = PROBE_CLEAR_POINTS.map((point) => at(point.xRatio, point.yRatio));
+  return { clear, clears, marker: at(PROBE_REGIONS.marker.xRatio, PROBE_REGIONS.marker.yRatio) };
 }

@@ -59,7 +59,9 @@ const dom = {
   joinHint: document.getElementById("join-hint"),
 };
 
-if (OVERLAY_MODE) document.body.classList.add("mode-overlay");
+// 类挂在 <html> 上而不是 <body>：决定画布底色的是 html，
+// 挂在 body 上会出现「body 透明了、html 那层黑还在」的假透明（§4.1 的 L0）。
+if (OVERLAY_MODE) document.documentElement.classList.add("mode-overlay");
 dom.hud.hidden = !params.has("diag");
 
 // ── 引擎 ────────────────────────────────────────────────────────────────────

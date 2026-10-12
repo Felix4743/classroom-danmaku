@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   L1_HEIGHT_RATIO,
   NEAR_BLACK,
+  PROBE_CLEAR_POINTS,
   PROBE_COLOR,
   PROBE_REGIONS,
   compareProbeSamples,
@@ -30,6 +31,17 @@ function frame(width, height, pixel) {
 const MAGENTA = { r: 255, g: 0, b: 255 };
 const DESKTOP = { r: 240, g: 240, b: 235 };
 const BLACK = { r: 4, g: 4, b: 6 };
+
+/** 往假画面上的某个比例位置涂一个像素。 */
+function paint(frame, width, xRatio, yRatio, pixel) {
+  const x = Math.min(frame.size.width - 1, Math.floor(xRatio * frame.size.width));
+  const y = Math.min(frame.size.height - 1, Math.floor(yRatio * frame.size.height));
+  const i = (y * width + x) * 4;
+  frame.bitmap[i] = pixel.b;
+  frame.bitmap[i + 1] = pixel.g;
+  frame.bitmap[i + 2] = pixel.r;
+  frame.bitmap[i + 3] = pixel.a ?? 255;
+}
 
 // ---------------------------------------------------------------- 选屏
 
@@ -109,19 +121,31 @@ test("浮不到 PPT 上面 → L1", () => {
   assert.match(d.reason, /PPT|全屏/);
 });
 
-test("探测本身失败时不自动降级，只是标记测不出来", () => {
-  // 自动降级是给"黑屏"这种一眼可见的灾难用的。探测失败说明我们什么都不知道，
-  // 这时候把 L0 换成 L1 只会让观感变差，解决不了任何问题。
+test("探测本身失败时退到 L1，并标记测不出来", () => {
+  /*
+   * 这条规则改过，理由值得留在测试里：早先的写法是"探测失败就照常上 L0，
+   * 因为自动降级只会让观感变差"。但猜错的两种后果完全不对称 ——
+   * 猜错成 L0 是一整块黑板盖住老师的课件（这节课上不下去），
+   * 猜错成 L1 只是弹幕在底部 25% 里跑（功能一个不少）。
+   * 所以"不确定"一律往 L1 倒，想全屏透明可以在托盘里手动切。
+   */
   const d = decideLevel({ visible: null, transparent: null, error: "抓不到屏幕画面" });
-  assert.equal(d.level, "L0");
+  assert.equal(d.level, "L1");
   assert.equal(d.unknown, true);
   assert.match(d.reason, /抓不到屏幕画面/);
 });
 
-test("桌面本来就是黑的、测不出透明时按 L0 算（不赌）", () => {
+test("桌面本来就是黑的、测不出透明时也退到 L1（不赌）", () => {
   const d = decideLevel({ visible: true, transparent: null });
-  assert.equal(d.level, "L0");
-  assert.equal(d.unknown, false);
+  assert.equal(d.level, "L1");
+  assert.equal(d.unknown, true);
+  assert.match(d.reason, /没法确认|黑/);
+});
+
+test("浮层是否置顶没测出来时同样退到 L1", () => {
+  const d = decideLevel({ visible: null, transparent: true });
+  assert.equal(d.level, "L1");
+  assert.equal(d.unknown, true);
 });
 
 // ---------------------------------------------------------------- 像素比对
@@ -226,6 +250,60 @@ test("画面缺失时三个结论都是 null，不让上层误判", () => {
   const result = compareProbeSamples(null, null);
   assert.equal(result.visible, null);
   assert.equal(result.transparent, null);
+});
+
+// ------------------------------------------------- 这次"全屏黑板"事故的回归钉子
+
+test("NEAR_BLACK 必须不小于默认容差，否则两个暗色会被同时判成'和黑一样'和'和参考一样'", () => {
+  // 这两个数是成对的：容差决定"两个颜色算不算同一个"。只要参考色落在容差
+  // 能碰到纯黑的范围内，两条结论就同时成立，于是必然谎报透明成功。
+  assert.ok(NEAR_BLACK >= 40, `NEAR_BLACK=${NEAR_BLACK} 小于默认容差 40`);
+});
+
+test("回归：桌面的深灰和窗口的黑底只差 19，绝不能被当成'一模一样'", () => {
+  /*
+   * 这是现场抓到的真实数字：桌面采样点 rgb(30,32,38)，窗口不透明的黑底
+   * rgb(11,13,18)，每个通道只差 19。旧的判定是 tolerance=40 配 NEAR_BLACK=18，
+   * 于是"差 19 ≤ 40"判成一样、"30 > 18"判成背景不黑 → 报告透明成功 →
+   * 老师眼前是一块盖住全屏的黑板（探测还写着"透明浮层可用"）。
+   * 现在它必须落在"测不出来"里。
+   */
+  const before = frame(200, 100, { r: 30, g: 32, b: 38 });
+  const after = frame(200, 100, { r: 11, g: 13, b: 18 });
+  const result = compareProbeSamples(readProbeSample(before), readProbeSample(after));
+  assert.equal(result.transparent, null);
+  assert.equal(result.detail.backgroundIsBlack, true);
+  // 而且它绝不能变成 L0
+  assert.equal(decideLevel({ visible: true, transparent: result.transparent }).level, "L1");
+});
+
+test("左半边多点采样会挑最亮的那块当参照，而不是死盯主采样点", () => {
+  // 主采样点 (0.25, 0.5) 是黑的，但角落里那块背景是亮的 —— 那才是能说话的参照
+  const before = frame(200, 100, BLACK);
+  const after = frame(200, 100, BLACK);
+  paint(before, 200, 0.1, 0.2, DESKTOP);
+
+  const result = compareProbeSamples(readProbeSample(before), readProbeSample(after));
+  // 亮的那块在探测后被黑底糊上了 → 透明失败
+  assert.equal(result.transparent, false);
+  assert.equal(result.detail.backgroundIsBlack, false);
+});
+
+test("同一块亮点探测前后没变 → 透明成功", () => {
+  const before = frame(200, 100, BLACK);
+  const after = frame(200, 100, BLACK);
+  paint(before, 200, 0.1, 0.2, DESKTOP);
+  paint(after, 200, 0.1, 0.2, DESKTOP);
+
+  const result = compareProbeSamples(readProbeSample(before), readProbeSample(after));
+  assert.equal(result.transparent, true);
+});
+
+test("readProbeSample 带回左半边的全部候选点", () => {
+  const sample = readProbeSample(frame(200, 100, DESKTOP));
+  assert.equal(sample.clears.length, PROBE_CLEAR_POINTS.length);
+  assert.ok(PROBE_CLEAR_POINTS.length >= 3, "只取一个点的时候，撞上黑背景就只能干瞪眼");
+  for (const pixel of sample.clears) assert.deepEqual(pixel, { b: 235, g: 240, r: 240, a: 255 });
 });
 
 test("readProbeSample 对空输入返回 null", () => {

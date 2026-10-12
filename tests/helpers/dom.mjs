@@ -210,6 +210,12 @@ export function installDom(html, { search = "" } = {}) {
   }
 
   const document = {
+    /*
+     * `documentElement` 必须存在：弹幕层靠给它加 `mode-overlay` 来让整块画布
+     * 透明（§4.1 的 L0），而底色是由 `html` 决定的 —— 加在 body 上会出现
+     * "body 透明了、html 那层黑还在"的假透明，老师看到的就是一块全屏黑板。
+     */
+    documentElement: new StubElement("html"),
     body: new StubElement("body"),
     getElementById(id) {
       // 刻意不兜底造一个：查了不存在的 id 就该当场炸，

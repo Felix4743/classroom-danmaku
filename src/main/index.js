@@ -15,9 +15,11 @@
  * 并且白白磨损 U 盘，换不来任何好处。
  */
 
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Menu, Tray, app, nativeImage, shell } from "electron";
+import { Menu, Tray, app, globalShortcut, nativeImage, shell } from "electron";
 
 import { hardenConsole, installCrashLog } from "./crash-log.js";
 import { dataDirFor, logDirFor, staticRootFor } from "./desktop-paths.js";
@@ -37,7 +39,38 @@ app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
-const state = { classroom: null, overlay: null, tray: null, quitting: false };
+const state = { classroom: null, overlay: null, tray: null, quitting: false, refreshTray: null };
+
+/**
+ * 老师手动选的弹幕层级别记在 `data/overlay.json`。
+ *
+ * 只在**探测没测出来**的时候才用它（见 `main()`）：那次选择是老师在真实机器上
+ * 亲眼看过之后做的，比我们的探测可靠。探测有结论时一律听探测的 ——
+ * 老师换了电脑、换了投影，记忆里的级别就不成立了。
+ */
+const OVERLAY_PREF_FILE = "overlay.json";
+
+function readOverlayPref(dataDir) {
+  try {
+    const raw = JSON.parse(readFileSync(join(dataDir, OVERLAY_PREF_FILE), "utf8"));
+    return raw?.level === "L0" || raw?.level === "L1" ? raw.level : null;
+  } catch {
+    return null; // 没存过、或者存坏了：都当作没选过
+  }
+}
+
+function writeOverlayPref(dataDir, level) {
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(
+      join(dataDir, OVERLAY_PREF_FILE),
+      `${JSON.stringify({ level, savedAt: new Date().toISOString() }, null, 2)}\n`,
+      "utf8",
+    );
+  } catch (error) {
+    console.warn("[main] 没能记住弹幕层级别", error?.message ?? error);
+  }
+}
 
 const isDev = !app.isPackaged;
 
@@ -75,6 +108,7 @@ function installCrashHandlers(logDir) {
 
 function quit() {
   state.quitting = true;
+  globalShortcut.unregisterAll();
   try {
     state.overlay?.destroy();
   } catch {
@@ -89,48 +123,119 @@ function quit() {
   app.quit();
 }
 
-function buildTray(classroom) {
+/** 弹幕层现在到底显示着没有。窗口被销毁/还没建都算"没有"。 */
+function overlayVisible() {
+  const win = state.overlay?.win;
+  return Boolean(win && !win.isDestroyed() && win.isVisible());
+}
+
+/**
+ * 隐藏/显示弹幕层。
+ *
+ * 这是**屏幕被弹幕层糊住时的最后一条出路**：窗口全屏、无边框、鼠标穿透、
+ * 还 skipTaskbar，老师点不到也关不掉。托盘菜单是一条路，但黑板盖满屏幕时
+ * 连托盘图标都可能看不见，所以还要有一个纯键盘的全局快捷键（Ctrl+Alt+D）。
+ */
+function toggleOverlayVisible() {
+  const win = state.overlay?.win;
+  if (!win || win.isDestroyed()) return;
+  if (win.isVisible()) {
+    win.hide();
+    console.log("[main] 弹幕层已隐藏（Ctrl+Alt+D 再按一次显示）");
+  } else {
+    win.showInactive();
+    console.log("[main] 弹幕层已显示");
+  }
+  state.refreshTray?.();
+}
+
+/** 老师手动切级别：立刻生效，并记住，下次探测测不出来时沿用。 */
+async function setOverlayLevel(level) {
+  if (!state.overlay) return;
+  try {
+    const result = await state.overlay.setLevel(level);
+    // 记的是**实际生效**的那一级：手动切 L0 但复验没过时会自己退回 L1，
+    // 那就不该把 L0 记下来，否则下次探测没结论时会照着一个不成立的级别走。
+    writeOverlayPref(state.dataDir, result?.level ?? level);
+    console.log(`[main] 弹幕层切到 ${result?.level ?? level}（老师手动）${result?.reason ? ` — ${result.reason}` : ""}`);
+  } catch (error) {
+    console.error(`[main] 切到 ${level} 失败`, error);
+  }
+  state.refreshTray?.();
+}
+
+function menuTemplate(classroom) {
   const base = `${classroom.url}/`;
   const open = (path) => shell.openExternal(`${base}${path}`);
+  const overlay = state.overlay;
+  const levelHint = overlay
+    ? `${overlay.level}${overlay.unknown ? "（探测没测出来）" : ""}`
+    : "（还没起来）";
 
+  return [
+    { label: "打开老师端（手机也可以）", click: () => open("host/") },
+    { label: "打开投影页（浏览器全屏）", click: () => open("screen/") },
+    { label: "打开手感调参页", click: () => open("tune/") },
+    { type: "separator" },
+    {
+      label: "弹幕层",
+      submenu: [
+        { label: `当前：${levelHint}`, enabled: false },
+        { type: "separator" },
+        {
+          label: "透明浮层（叠在 PPT 上）",
+          type: "radio",
+          checked: overlay?.level === "L0",
+          click: () => setOverlayLevel("L0"),
+        },
+        {
+          label: "底部弹幕带（占屏幕下方 25%）",
+          type: "radio",
+          checked: overlay?.level === "L1",
+          click: () => setOverlayLevel("L1"),
+        },
+        { type: "separator" },
+        {
+          label: overlayVisible() ? "隐藏弹幕层（Ctrl+Alt+D）" : "显示弹幕层（Ctrl+Alt+D）",
+          click: () => toggleOverlayVisible(),
+        },
+      ],
+    },
+    { type: "separator" },
+    { label: `学生地址：${classroom.studentUrl ?? "见 /api/info"}`, enabled: false },
+    { label: "打开数据目录", click: () => shell.openPath(classroom.store?.dir ?? "") },
+    { type: "separator" },
+    { label: "退出（Ctrl+Alt+Q）", click: () => quit() },
+  ];
+}
+
+function buildTray(classroom) {
   const tray = new Tray(nativeImage.createFromDataURL(TRAY_ICON_DATA_URL));
   tray.setToolTip("课堂弹幕");
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: "打开老师端（手机也可以）", click: () => open("host/") },
-      { label: "打开投影页（浏览器全屏）", click: () => open("screen/") },
-      { label: "打开手感调参页", click: () => open("tune/") },
-      { type: "separator" },
-      {
-        label: "弹幕层",
-        submenu: [
-          {
-            label: "透明浮层（叠在 PPT 上）",
-            type: "radio",
-            checked: state.overlay?.level === "L0",
-            click: () => state.overlay?.setLevel("L0"),
-          },
-          {
-            label: "底部弹幕带（占屏幕下方 25%）",
-            type: "radio",
-            checked: state.overlay?.level === "L1",
-            click: () => state.overlay?.setLevel("L1"),
-          },
-        ],
-      },
-      { type: "separator" },
-      { label: `学生地址：${classroom.studentUrl ?? "见 /api/info"}`, enabled: false },
-      { label: "打开数据目录", click: () => shell.openPath(classroom.store?.dir ?? "") },
-      { type: "separator" },
-      { label: "退出", click: () => quit() },
-    ]),
-  );
-  tray.on("double-click", () => open("host/"));
+  const refresh = () => tray.setContextMenu(Menu.buildFromTemplate(menuTemplate(classroom)));
+  refresh();
+  state.refreshTray = refresh;
+  tray.on("double-click", () => shell.openExternal(`${classroom.url}/host/`));
   return tray;
+}
+
+/**
+ * 全局快捷键。两条都是**老师被程序坑住时的逃生门**，所以用的是
+ * `globalShortcut`（不依赖窗口焦点）而不是页面里的键盘事件。
+ */
+function registerShortcuts() {
+  const bind = (accelerator, handler, what) => {
+    const ok = globalShortcut.register(accelerator, handler);
+    if (!ok) console.warn(`[main] 全局快捷键 ${accelerator}（${what}）被别的程序占了`);
+    return ok;
+  };
+  bind("Control+Alt+D", toggleOverlayVisible, "隐藏/显示弹幕层");
+  bind("Control+Alt+Q", quit, "退出");
 }
 
 async function main() {
   const { dataDir, logDir, staticRoot } = resolvePaths();
+  state.dataDir = dataDir;
   installCrashHandlers(logDir);
   console.log(`[main] 数据目录：${dataDir}`);
   console.log(`[main] 静态根目录：${staticRoot}`);
@@ -164,7 +269,36 @@ async function main() {
   }
 
   try {
-    state.overlay = await createOverlay({ url: `${classroom.url}/screen/` });
+    /*
+     * `CLASSROOM_OVERLAY_LEVEL=L0|L1` 直接钉死级别，跳过探测。
+     * 排障和"我就要全屏透明"时用得上：探测在某些教室电脑上确实测不出结论，
+     * 这时候需要一条绕过它的路。
+     */
+    const forced = process.env.CLASSROOM_OVERLAY_LEVEL;
+    const forcedLevel = forced === "L0" || forced === "L1" ? forced : null;
+    if (forcedLevel) console.log(`[main] CLASSROOM_OVERLAY_LEVEL=${forcedLevel}，跳过探测`);
+
+    state.overlay = await createOverlay({
+      url: `${classroom.url}/screen/`,
+      forcedLevel,
+    });
+
+    /*
+     * 探测"测不出来"（背后本身就是黑的）时，沿用老师上次手动选的级别。
+     *
+     * 为什么只在这时候用：探测有结论时它比记忆可靠 —— 老师换了电脑、
+     * 换了投影，"上次能用 L0"就不再成立。而探测没结论时，老师在真机上
+     * 亲眼看过之后按下的那个选择，是当下唯一的信息。
+     */
+    const remembered = readOverlayPref(dataDir);
+    if (state.overlay.unknown && remembered && remembered !== state.overlay.level) {
+      console.log(`[main] 探测没测出来，沿用上次老师手动选的 ${remembered}`);
+      await setOverlayLevel(remembered);
+    }
+
+    state.refreshTray?.();
+    registerShortcuts();
+    console.log("[main] 全局快捷键：Ctrl+Alt+D 隐藏/显示弹幕层，Ctrl+Alt+Q 退出");
   } catch (error) {
     // 弹幕层起不来不等于课上不了：老师还能用浏览器全屏开 /screen/（§4.1 的 L2）。
     console.error("[main] 弹幕层没起来，退回浏览器全屏方案（L2）", error);

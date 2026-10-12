@@ -23,15 +23,35 @@ body {
   height: 100%;
   /* 投影上不该出现任何滚动条 */
   overflow: hidden;
-  background: #0b0d12;
   font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
 }
 
 /*
- * `?mode=overlay`：交给 Electron 的透明窗口用（§4.1 的 L0）。
- * 底色必须真的是透明的 —— 窗口是透明的，页面自己再糊一层黑，PPT 就被挡住了。
+ * 底色**只写在 `html` 上，绝不写在 body 上**。
+ *
+ * 这是踩过的坑：不带 pattern 时 body 的 background 会「传播」到画布，
+ * 而两个都写了的时候以 html 为准。之前把两者合在一处写 #0b0d12，
+ * 于是 `body.mode-overlay { background: transparent }` 完全不起作用 ——
+ * html 那层黑照旧铺满整个视口，透明窗口就变成一块盖住全屏的黑板，
+ * 老师连课件都看不见（而且探测还测不出来，因为探测页用的是另一份 CSS）。
+ *
+ * 现在的规矩：html 拥有底色，overlay 模式下由 html 自己让开。
  */
-body.mode-overlay {
+html {
+  background: #0b0d12;
+}
+
+body {
+  background: transparent;
+}
+
+/*
+ * `?mode=overlay`：交给 Electron 的透明窗口用（§4.1 的 L0）。
+ * 类挂在 `document.documentElement` 上（screen.js 里加），不是挂在 body 上 ——
+ * 决定画布底色的是 html，那就把类加到 html 上，别让两者再有机会不一致。
+ */
+html.mode-overlay,
+html.mode-overlay body {
   background: transparent;
 }
 
@@ -85,7 +105,7 @@ body.mode-overlay {
   color: #dfe6f2;
 }
 
-body.mode-overlay .status {
+html.mode-overlay .status {
   /* 透明窗口里"我连不上了"这件事由老师手机负责，投影上不再多一层 */
   display: none;
 }
@@ -135,7 +155,7 @@ body.mode-overlay .status {
   font-size: 13px;
 }
 
-body.mode-overlay .join {
+html.mode-overlay .join {
   /* 透明窗口里这层底是叠在 PPT 上的，得再淡一点，别像贴了张纸 */
   background: rgba(12, 14, 18, 0.72);
 }

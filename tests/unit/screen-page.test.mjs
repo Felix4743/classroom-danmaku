@@ -12,6 +12,7 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -64,6 +65,51 @@ test("投影页：以只收不发的角色加入", async () => {
 test("投影页：接了 mode=overlay 就以 overlay 身份连（给透明窗口用）", async () => {
   const { socket } = await boot("?mode=overlay");
   assert.equal(socket.lastSent("join").payload.role, "overlay");
+});
+
+// ------------------------------------------------- 透明窗口（§4.1 的 L0）
+
+test("投影页：mode=overlay 的开关加在 <html> 上，不是 <body> 上", async () => {
+  /*
+   * 这一条是"全屏黑板"事故的回归钉子。
+   *
+   * 窗口是不是真的透明，取决于**画布**的底色，而画布的底色由 `html` 决定：
+   * `body` 的 background 只在 `html` 没有 background 时才往上传播。
+   * `screen.css` 里 `html, body` 合并写了 `background: #0b0d12`，
+   * 于是 `body.mode-overlay { background: transparent }` 一点用都没有，
+   * 整块屏被涂成不透明的深色 —— 而启动探测测的是另一份探测页的 CSS，
+   * 一路报告"透明浮层可用"。
+   */
+  await boot("?mode=overlay");
+  assert.ok(
+    globalThis.document.documentElement.classList.contains("mode-overlay"),
+    "mode-overlay 没加在 <html> 上，透明窗口会变成一块全屏黑板",
+  );
+  assert.ok(
+    !globalThis.document.body.classList.contains("mode-overlay"),
+    "只加在 body 上是不够的：html 那层底色还在，照样会盖住 PPT",
+  );
+});
+
+test("投影页：不带 mode=overlay 时 <html> 上不能有这个类（浏览器全屏形态要正常底色）", async () => {
+  await boot("?diag");
+  assert.ok(!globalThis.document.documentElement.classList.contains("mode-overlay"));
+});
+
+test("screen.css：底色只写在 html 上，overlay 模式由 html 自己让开", () => {
+  const css = readFileSync(join(PAGE, "screen.css"), "utf8");
+
+  // 1) `html, body` 合并的那条规则里不能出现 background —— 一旦出现，
+  //    它就是画布底色，body 上的 mode-overlay 再怎么透明都没用。
+  const shared = css.match(/html\s*,\s*body\s*\{[^}]*\}/);
+  assert.ok(shared, "没找到 html, body 的公共规则");
+  assert.ok(!/background/.test(shared[0]), "html, body 合并规则里不能写 background");
+
+  // 2) overlay 模式的透明必须落在 html 上
+  assert.match(css, /html\.mode-overlay[^{]*\{[^}]*background:\s*transparent/);
+
+  // 3) 非 overlay 时画布得有底色，不然投影上是浏览器默认的白底
+  assert.match(css, /html\s*\{[^}]*background:\s*#0b0d12/);
 });
 
 test("投影页：收到弹幕就画出来", async () => {
