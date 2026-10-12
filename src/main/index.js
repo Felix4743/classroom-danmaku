@@ -163,6 +163,16 @@ async function main() {
     console.warn("[main] 学生地址探测失败", error?.message ?? error);
   }
 
+  // 托盘先于弹幕层建。弹幕层是全屏 + 鼠标穿透 + 不进任务栏的窗口 ——
+  // 万一探测卡住或者窗口行为异常，托盘是老师唯一的出口，必须先在那儿。
+  state.tray = buildTray(classroom);
+
+  if (process.env.CLASSROOM_SKIP_OVERLAY === "1") {
+    // 只想验服务、不想被一层全屏弹幕盖住屏幕时用（调服务端、查网卡都能用得上）
+    console.log("[main] CLASSROOM_SKIP_OVERLAY=1，跳过弹幕层窗口");
+    return;
+  }
+
   try {
     state.overlay = await createOverlay({ url: `${classroom.url}/screen/` });
   } catch (error) {
@@ -170,8 +180,6 @@ async function main() {
     console.error("[main] 弹幕层没起来，退回浏览器全屏方案（L2）", error);
     shell.openExternal(`${classroom.url}/screen/`);
   }
-
-  state.tray = buildTray(classroom);
 }
 
 if (!app.requestSingleInstanceLock()) {
