@@ -251,6 +251,95 @@ test("聚合计数（§4.6）", async (t) => {
     const actions = send(session, "c1", { text: "这里我没听懂" }, 1_000_000);
     assert.equal(actions.some((a) => a.event === S2C.UPDATE), false);
   });
+
+  await t.test("窗口内第二次点击不再新建弹幕，只加数字", () => {
+    const { session } = makeSession();
+    joinStudent(session, "c1");
+    joinStudent(session, "c2");
+    const first = send(session, "c1", { text: "没听懂", presetId: "not_understood" }, 1_000_000);
+    const itemId = room(first, ROOM.PUBLIC).find((a) => a.event === S2C.NEW).payload.id;
+
+    const second = send(
+      session,
+      "c2",
+      { text: "没听懂", presetId: "not_understood", tempId: "t-2" },
+      1_000_100,
+    );
+
+    // 这一条是整个聚合机制存在的理由：屏幕上是一条「没听懂 ×2」，
+    // 不是两条一模一样的弹幕各顶着同一个数字
+    assert.equal(session.itemCount, 1, "屏幕上只该有一条「没听懂」");
+    assert.equal(
+      room(second, ROOM.PUBLIC).some((a) => a.event === S2C.NEW),
+      false,
+      "不该再往公共流里塞一条新弹幕",
+    );
+
+    // 但点的人自己要收到回应，否则他会以为没点上；这份回显指向屏幕上真实的那一条
+    const echo = event(room(second, "c2"), S2C.NEW);
+    assert.equal(echo.length, 1);
+    assert.equal(echo[0].payload.id, itemId);
+    assert.equal(echo[0].payload.tempId, "t-2", "回显必须带上学生自己那个 tempId");
+  });
+
+  await t.test("31 个人同时点，广播只有几次而不是 31 次", () => {
+    const { session } = makeSession();
+    const ids = [];
+    for (let i = 0; i < 31; i += 1) {
+      const clientId = `c${i}`;
+      joinStudent(session, clientId);
+      ids.push(clientId);
+    }
+
+    let updates = 0;
+    for (const clientId of ids) {
+      const actions = send(session, clientId, { text: "没听懂", presetId: "not_understood" }, 1_000_000);
+      updates += room(actions, ROOM.PUBLIC).filter((a) => a.event === S2C.UPDATE).length;
+    }
+    // 同一时刻的 31 次点击全被节流压住，等过了 200ms 才合成一次广播
+    assert.equal(updates, 1, "第一条立刻可见的那次之外，同一时刻不该再有广播");
+    updates += room(session.drain(1_000_000 + BROADCAST_THROTTLE_MS), ROOM.PUBLIC).filter(
+      (a) => a.event === S2C.UPDATE,
+    ).length;
+
+    assert.equal(session.itemCount, 1, "31 个人点的是同一条弹幕");
+    assert.equal(updates, 2, "31 次点击只该产生两次计数广播：第一次立刻可见，之后合并成一次");
+  });
+
+  await t.test("聚合的那条被老师删掉之后，后面的点击退化成一条新弹幕", () => {
+    const { session } = makeSession();
+    joinStudent(session, "c1");
+    joinStudent(session, "c2");
+    joinAs(session, "h1", ROLE.HOST);
+
+    const first = send(session, "c1", { text: "没听懂", presetId: "not_understood" }, 1_000_000);
+    const itemId = room(first, ROOM.PUBLIC).find((a) => a.event === S2C.NEW).payload.id;
+    session.receive("h1", C2S.HOST_REMOVE, { id: itemId }, 1_000_050);
+    session.drain(1_000_050);
+
+    const again = send(session, "c2", { text: "没听懂", presetId: "not_understood" }, 1_000_100);
+    // 宁可多一条弹幕，也不能让学生点了按钮却什么都没发生
+    assert.equal(
+      room(again, ROOM.PUBLIC).some((a) => a.event === S2C.NEW),
+      true,
+      "目标弹幕已经不在屏幕上了，就该老老实实新建一条",
+    );
+  });
+
+  await t.test("老师清屏之后聚合计数重新开始", () => {
+    const { session } = makeSession();
+    joinStudent(session, "c1");
+    joinStudent(session, "c2");
+    joinAs(session, "h1", ROLE.HOST);
+
+    send(session, "c1", { text: "没听懂", presetId: "not_understood" }, 1_000_000);
+    session.receive("h1", C2S.HOST_CLEAR, {}, 1_000_050);
+    session.drain(1_000_050);
+
+    const again = send(session, "c2", { text: "没听懂", presetId: "not_understood" }, 1_000_100);
+    const update = room(again, ROOM.PUBLIC).find((a) => a.event === S2C.UPDATE);
+    assert.equal(update.payload.aggregate, 1, "屏幕上已经没有那条 ×1 了，新一轮从 1 开始数");
+  });
 });
 
 test("点赞（§4.7）", async (t) => {

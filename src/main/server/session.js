@@ -271,6 +271,38 @@ export function createSession(options = {}) {
 
     const device = deviceFor(client.deviceId, ts);
     const id = `${ts.toString(36)}-${(seq++).toString(36)}`;
+
+    /*
+     * 预置按钮先问聚合器（§4.6）。
+     *
+     * 同一个 30 秒窗口里的第二次点击**不该再产生一条新弹幕**：31 个人点
+     * 「没听懂」，屏幕上该是一条 `没听懂 ×31`，而不是 31 条一模一样的弹幕。
+     * 聚合省下来的就是这块地方 —— 如果每条点击都建一条，聚合就只变成了
+     * 给每条重复弹幕盖一个相同的数字，屏幕反而更吵。
+     */
+    const hit = preset ? aggregator.hit({ presetId: preset.id, id, ts }) : null;
+    if (hit && !hit.isFirst) {
+      const target = items.get(hit.id);
+      if (target && !target.removed) {
+        target.aggregate = hit.count;
+        counts.accepted += 1;
+        const actions = [];
+        const alert = alertFor(hit, preset, target.id);
+        if (alert) actions.push(alert);
+        // 点的人自己也要有回应，否则他会怀疑自己没点上。给他的这份带着
+        // tempId，好把他本地先回显的那条换成屏幕上真实存在的那条。
+        // 这是发给一个人的，不是广播，所以不受下面的节流影响。
+        actions.push(send(client.clientId, S2C.NEW, { ...publicDanmaku(target), tempId }));
+        // 计数变化的广播**故意不在这里发**：交给 200ms 节流的 flush（§4.6）。
+        // 31 个人同时点「没听懂」，屏幕上该合并成几次更新，而不是 31 次广播 ——
+        // 聚合省下了屏幕空间，却把压力全推给网络就白做了。
+        return actions;
+      }
+      // 那条聚合弹幕已经被删掉或清屏清掉了。这时候宁可退化成一条新弹幕 ——
+      // 学生点了按钮却什么都没发生，比屏幕上多一条糟糕得多。
+      aggregator.forget(hit.key);
+    }
+
     const item = {
       id,
       text: body,
@@ -301,31 +333,36 @@ export function createSession(options = {}) {
       send(ROOM.HOST, S2C.NEW, hostItem(item)),
     ];
 
-    if (preset) {
-      const hit = aggregator.hit({ presetId: preset.id, id, ts });
+    if (hit) {
       item.aggregateKey = hit.key;
       item.aggregate = hit.count;
       // 第一次命中不走节流：学生点了按钮却要等 200ms 才看到自己的弹幕，这个延迟感觉得到
       if (hit.isFirst) {
         actions.push(send(ROOM.PUBLIC, S2C.UPDATE, { id, aggregate: hit.count }));
       }
-      const step = crossedStep(hit.count);
-      // 提醒档位记在**桶**上，不是记在弹幕上。记在弹幕上的话第 5 条和第 6 条
-      // 会各触发一次：第 6 条是新建的 item，它自己的档位又从 0 开始。
-      // 老师收到的应该是"这个话题到 5 个人了"，而不是每来一条都震一下。
-      if (step > (alertedSteps.get(hit.key) ?? 0)) {
-        alertedSteps.set(hit.key, step);
-        actions.push(
-          send(ROOM.HOST, S2C.HOST_ALERT, {
-            id,
-            reason: preset.label,
-            aggregate: hit.count,
-          }),
-        );
-      }
+      const alert = alertFor(hit, preset, id);
+      if (alert) actions.push(alert);
     }
 
     return actions;
+  }
+
+  /**
+   * 话题热到跨档时提醒老师一次（§4.6）。
+   *
+   * 档位记在**桶**上，不是记在弹幕上。记在弹幕上的话第 5 条和第 6 条会各触发
+   * 一次：第 6 条是新建的 item，它自己的档位又从 0 开始。老师收到的应该是
+   * "这个话题到 5 个人了"，而不是每来一条都震一下。
+   */
+  function alertFor(hit, preset, itemId) {
+    const step = crossedStep(hit.count);
+    if (step <= (alertedSteps.get(hit.key) ?? 0)) return null;
+    alertedSteps.set(hit.key, step);
+    return send(ROOM.HOST, S2C.HOST_ALERT, {
+      id: itemId,
+      reason: preset.label,
+      aggregate: hit.count,
+    });
   }
 
   function crossedStep(count) {
@@ -362,7 +399,10 @@ export function createSession(options = {}) {
     switch (event) {
       case C2S.HOST_CLEAR: {
         clearedAt = ts;
-        // 只是"清屏"，数据一条都不删 —— 导出时老师要看到完整的课堂
+        // 只是"清屏"，数据一条都不删 —— 导出时老师要看到完整的课堂。
+        // 但聚合计数要清掉：屏幕上已经没有那条 `没听懂 ×23` 了，桶还留着的话，
+        // 后面每一次点击都在给一条看不见的弹幕加数。
+        aggregator.reset();
         return [send(ROOM.PUBLIC, S2C.STATE, statePayload())];
       }
 
@@ -380,6 +420,8 @@ export function createSession(options = {}) {
         const item = items.get(payload.id);
         if (!item || item.removed) return [];
         item.removed = true;
+        // 它已经不在地上了，不该再收聚合计数
+        if (item.aggregateKey) aggregator.forget(item.aggregateKey);
         counts.removed += 1;
         return [
           send(ROOM.PUBLIC, S2C.REMOVE, { id: item.id, reason: "host" }),

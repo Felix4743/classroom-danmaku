@@ -228,6 +228,25 @@ test("查询与回收", async (t) => {
     assert.equal(agg.flush(W1 + BROADCAST_THROTTLE_MS).length, 1);
   });
 
+  await t.test("forget 丢掉一个桶：那条弹幕已经不在屏幕上了", () => {
+    const agg = createAggregator();
+    const first = agg.hit({ presetId: "again", id: "a", ts: W0 });
+    agg.hit({ presetId: "again", id: "a", ts: W0 + 1 });
+    assert.equal(agg.forget(first.key), true);
+    assert.equal(agg.size, 0);
+    assert.equal(agg.pending, 0, "待广播队列里也不能留 —— 发一个指向已删弹幕的更新没意义");
+
+    // 下一次点击是全新的一条，从 1 开始数
+    const next = agg.hit({ presetId: "again", id: "b", ts: W0 + 2 });
+    assert.equal(next.isFirst, true);
+    assert.equal(next.id, "b");
+    assert.equal(next.count, 1);
+
+    // 空 key 是"这条弹幕本来就没参与聚合"，静默返回 false
+    assert.equal(agg.forget(null), false);
+    assert.equal(agg.forget("again#999999"), false);
+  });
+
   await t.test("stats 反映真实计数", () => {
     const agg = createAggregator();
     agg.hit({ presetId: "again", id: "a", ts: W0 });

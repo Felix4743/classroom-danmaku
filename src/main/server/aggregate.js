@@ -136,6 +136,19 @@ export function createAggregator(options = {}) {
       return updates;
     },
 
+    /**
+     * 丢掉一个桶。
+     *
+     * 用在"那条弹幕已经看不见了"的时候：老师删掉它、或者清屏之后。桶还留着
+     * 的话，屏幕上没有那条弹幕了，可后面每一次点击都还在往它身上加数 ——
+     * 学生看到自己点了按钮，屏幕上什么也没发生。
+     */
+    forget(key) {
+      if (!key) return false;
+      dirty.delete(key);
+      return buckets.delete(key);
+    },
+
     /** 当前窗口里某个预置项的计数，没有就返回 0。 */
     peek(presetId, ts = now()) {
       return buckets.get(aggregateKey(presetId, ts, windowMs))?.count ?? 0;
