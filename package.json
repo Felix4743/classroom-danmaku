@@ -13,7 +13,7 @@
     "dev": "node scripts/dev-classroom.mjs",
     "dev:screen": "node scripts/dev-server.mjs",
     "desktop": "electron .",
-    "pack": "electron-builder --win portable"
+    "pack": "electron-builder --win --publish never"
   },
   "engines": {
     "node": ">=20"
@@ -56,7 +56,8 @@
     ],
     "win": {
       "target": [
-        "portable"
+        "portable",
+        "zip"
       ],
       "icon": "assets/icon.png"
     },
