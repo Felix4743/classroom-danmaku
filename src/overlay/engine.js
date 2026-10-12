@@ -266,7 +266,9 @@ export class DanmakuEngine {
    */
   setAggregate(id, count) {
     if (!id || !Number.isFinite(count)) return false;
-    for (const list of [this.active, this.waiting]) {
+    // 置顶条上的也要算：置顶的经常正是"×23 个没听懂"那一条，
+    // 钉上去之后计数还得继续涨，否则最要紧的数字反而被冻住了
+    for (const list of [this.active, this.waiting, this.pinned]) {
       for (let i = 0; i < list.length; i++) {
         if (list[i].id === id) {
           list[i].aggregate = count;

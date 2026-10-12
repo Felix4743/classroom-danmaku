@@ -144,6 +144,20 @@ export function createSession(options = {}) {
     };
   }
 
+  /**
+   * 置顶广播的载荷。
+   *
+   * 它必须带**完整内容**，不能只带 id：投影可能从来没收到过这条弹幕 ——
+   * 它早就滚过去了，或者投影是刚打开、刚重连的。只发 id 的话，投影查无此条，
+   * 于是老师按了置顶、投影上什么都没发生。
+   *
+   * `aggregate` 也一起带上：置顶的经常正是"×23 个没听懂"那一条，
+   * 钉上去却丢掉计数，等于把最要紧的那个数字弄没了。
+   */
+  function pinPayload(item) {
+    return { ...publicDanmaku(item), aggregate: item.aggregate ?? 0, pinned: item.pinned };
+  }
+
   function visibleItems() {
     const list = [];
     for (const id of order) {
@@ -230,7 +244,7 @@ export function createSession(options = {}) {
         .sort((a, b) => a.pinnedAt - b.pinnedAt);
       for (const item of pinned) {
         actions.push(send(clientId, S2C.NEW, publicDanmaku(item)));
-        actions.push(send(clientId, S2C.PIN, { ...publicDanmaku(item), pinned: true }));
+        actions.push(send(clientId, S2C.PIN, pinPayload(item)));
       }
     }
 
@@ -457,11 +471,8 @@ export function createSession(options = {}) {
           item.pinnedAt = 0;
         }
         return [
-          // 置顶消息里带上完整内容：投影可能从来没收到过这条弹幕（它早就
-          // 滚过去了，或者投影是刚打开/刚重连的）。只发 id 的话，投影会
-          // 查无此条，于是老师点了置顶、投影上什么都没发生。
-          send(ROOM.PUBLIC, S2C.PIN, { ...publicDanmaku(item), pinned: item.pinned }),
-          send(ROOM.HOST, S2C.PIN, { ...publicDanmaku(item), pinned: item.pinned }),
+          send(ROOM.PUBLIC, S2C.PIN, pinPayload(item)),
+          send(ROOM.HOST, S2C.PIN, pinPayload(item)),
         ];
       }
 

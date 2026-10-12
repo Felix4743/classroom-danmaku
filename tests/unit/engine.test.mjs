@@ -559,3 +559,25 @@ test("计数只有到 2 才写在弹幕后面", () => {
   assert.equal(engine.labelOf(engine.active[0]), "没听懂 ×3");
 });
 
+test("钉在顶上的那条，计数也还得继续涨", () => {
+  const engine = makeEngine();
+  engine.pin(pinnedPayload("p1", { text: "没听懂", aggregate: 3 }));
+  assert.equal(engine.labelOf(engine.pinned[0]), "没听懂 ×3");
+
+  assert.equal(engine.setAggregate("p1", 24), true, "置顶的经常正是「×N 个没听懂」那条");
+  assert.equal(engine.labelOf(engine.pinned[0]), "没听懂 ×24");
+});
+
+test("置顶请求里带着聚合计数，钉上去不会把数字弄丢", () => {
+  const engine = makeEngine();
+  // 服务端在 host:pin 的广播里带完整内容（见 session.js 的 pinPayload）
+  assert.equal(engine.pin(pinnedPayload("p1", { text: "没听懂", aggregate: 23 })), true);
+  assert.equal(engine.labelOf(engine.pinned[0]), "没听懂 ×23");
+
+  // 0 或者没带的时候不能写成 ×0 / ×undefined
+  assert.equal(engine.pin(pinnedPayload("p2", { text: "举个栗子", aggregate: 0 })), true);
+  assert.equal(engine.labelOf(engine.pinned[1]), "举个栗子");
+  assert.equal(engine.pin(pinnedPayload("p3", { text: "再讲一遍" })), true);
+  assert.equal(engine.labelOf(engine.pinned[2]), "再讲一遍");
+});
+

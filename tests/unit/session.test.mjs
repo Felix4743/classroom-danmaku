@@ -431,6 +431,52 @@ test("老师管控", async (t) => {
     assert.equal(removed.room, ROOM.PUBLIC);
   });
 
+  await t.test("置顶的广播带着完整内容，投影没见过这条也能钉上", () => {
+    const { session, id } = setup();
+    session.receive("h1", C2S.HOST_PIN, { id, pinned: true }, 1_000_000);
+    const actions = session.drain(1_000_000);
+
+    for (const room of [ROOM.PUBLIC, ROOM.HOST]) {
+      const pin = actions.find((a) => a.event === S2C.PIN && a.room === room);
+      // 只发 id 的话，投影那边查无此条 —— 老师按了置顶、投影上什么都没发生
+      assert.equal(pin.payload.id, id);
+      assert.equal(typeof pin.payload.text, "string");
+      assert.ok(pin.payload.text.length > 0, "置顶载荷必须带正文");
+      assert.equal(pin.payload.pinned, true);
+      assert.equal(typeof pin.payload.aggregate, "number", "计数也要带上，钉上去不能把数字弄丢");
+    }
+  });
+
+  await t.test("钉住的弹幕继续涨计数，再置顶时带上新的数字", () => {
+    const { session } = makeSession();
+    joinAs(session, "h1", ROLE.HOST);
+    // 三个人点同一个预置项。限流是按设备算的，所以必须是三条连接；
+    // 三条都要落在同一个 30 秒聚合窗口里，才数得成一条 ×3
+    let id = null;
+    for (const [index, clientId] of ["c1", "c2", "c3"].entries()) {
+      joinStudent(session, clientId);
+      const actions = send(
+        session,
+        clientId,
+        { text: "没听懂", presetId: "not_understood" },
+        1_000_000 + index * 4_000,
+      );
+      // 只有第一下会在公共房间广播 `danmaku:new`；后面两下是"合并进已有那条"，
+      // 只回显给点的人自己（屏幕上不该因此多飘两条，§4.6）
+      const created = actions.find((a) => a.event === S2C.NEW && a.room === ROOM.PUBLIC);
+      if (created) id = created.payload.id;
+      else assert.ok(actions.some((a) => a.event === S2C.NEW), `${clientId} 该收到回显`);
+    }
+    session.drain(1_010_000);
+
+    session.receive("h1", C2S.HOST_PIN, { id, pinned: true }, 1_011_000);
+    const pin = session
+      .drain(1_011_000)
+      .find((a) => a.event === S2C.PIN && a.room === ROOM.PUBLIC);
+    assert.equal(pin.payload.aggregate, 3, "钉上去的正是「×3 个没听懂」，数字不能丢");
+    assert.equal(pin.payload.text, "没听懂");
+  });
+
   await t.test("置顶最多 3 条，超出淘汰最旧的", () => {
     const { session } = setup();
     const ids = [setup().id];
