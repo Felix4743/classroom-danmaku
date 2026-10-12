@@ -91,7 +91,13 @@ export function createAggregator(options = {}) {
       buckets.set(key, bucket);
       counts.created += 1;
       // 第一条不走节流：它的 danmaku:new 要立刻发出去，
-      // 学生点了按钮却要等 200ms 才看到自己的弹幕，这个延迟是能感觉到的
+      // 学生点了按钮却要等 200ms 才看到自己的弹幕，这个延迟是能感觉到的。
+      //
+      // 但节流窗口必须从这一刻起算：新建的桶不进 dirty，第一次 flush 会
+      // 因为 dirty 为空直接返回、lastFlushTs 原地不动，于是紧跟着的第二次
+      // 点击必然立刻又广播一次 —— 31 个人同时点会变成 31 次广播里的头两次
+      // 白送。既然刚刚已经把这个计数发出去了，就当作发过一次。
+      lastFlushTs = ts;
       return { ...bucket, isFirst: true };
     },
 

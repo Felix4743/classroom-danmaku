@@ -62,7 +62,7 @@ test("同一个窗口里反复点，合成一条计数", async (t) => {
     for (let i = 0; i < 30; i += 1) {
       agg.hit({ presetId: "not_understood", id: "first", ts: W0 + i });
     }
-    const updates = agg.flush(W0 + 100);
+    const updates = agg.flush(W0 + BROADCAST_THROTTLE_MS);
     assert.equal(updates.length, 1);
     assert.deepEqual(updates[0], {
       key: "not_understood#0",
@@ -79,7 +79,7 @@ test("同一个窗口里反复点，合成一条计数", async (t) => {
     agg.hit({ presetId: "not_understood", id: "a", ts: W0 + 1 });
     agg.hit({ presetId: "again", id: "b", ts: W0 + 1 });
 
-    const updates = agg.flush(W0 + 100);
+    const updates = agg.flush(W0 + BROADCAST_THROTTLE_MS);
     assert.equal(updates.length, 2);
     const byId = new Map(updates.map((u) => [u.id, u.aggregate]));
     assert.equal(byId.get("a"), 2);
@@ -129,10 +129,10 @@ test("窗口切换：过期即冻结，新窗口是新的一条", async (t) => {
     const agg = createAggregator();
     agg.hit({ presetId: "again", id: "x", ts: W0 });
     agg.hit({ presetId: "again", id: "x", ts: W0 + 1 });
-    assert.equal(agg.flush(W0 + 100)[0].aggregate, 2);
+    assert.equal(agg.flush(W0 + BROADCAST_THROTTLE_MS)[0].aggregate, 2);
     // 再点一次
-    agg.hit({ presetId: "again", id: "x", ts: W0 + 200 });
-    assert.equal(agg.flush(W0 + 400)[0].aggregate, 3);
+    agg.hit({ presetId: "again", id: "x", ts: W0 + BROADCAST_THROTTLE_MS });
+    assert.equal(agg.flush(W0 + BROADCAST_THROTTLE_MS * 2)[0].aggregate, 3);
   });
 });
 
@@ -149,13 +149,14 @@ test("广播节流 200ms", async (t) => {
     const agg = createAggregator();
     agg.hit({ presetId: "not_understood", id: "a", ts: W0 });
     agg.hit({ presetId: "not_understood", id: "a", ts: W0 + 10 });
-    assert.equal(agg.flush(W0)[0].aggregate, 2);
+    assert.deepEqual(agg.flush(W0 + 10), [], "第一次点击刚广播过，窗口从那一刻起算");
+    assert.equal(agg.pending, 1, "拿不到不代表丢了，它还在队列里");
 
     agg.hit({ presetId: "not_understood", id: "a", ts: W0 + 50 });
     assert.deepEqual(agg.flush(W0 + 100), [], "才过 100ms");
     assert.deepEqual(agg.flush(W0 + 199), [], "才过 199ms");
-    assert.equal(agg.pending, 1, "拿不到不代表丢了，它还在队列里");
-    const updates = agg.flush(W0 + 200);
+    assert.equal(agg.pending, 1, "还是那一条，没被冲掉");
+    const updates = agg.flush(W0 + BROADCAST_THROTTLE_MS);
     assert.equal(updates.length, 1);
     assert.equal(updates[0].aggregate, 3);
     assert.equal(agg.pending, 0);
@@ -165,7 +166,7 @@ test("广播节流 200ms", async (t) => {
     const agg = createAggregator();
     agg.hit({ presetId: "not_understood", id: "a", ts: W0 });
     for (let i = 0; i < 30; i += 1) agg.hit({ presetId: "not_understood", id: "a", ts: W0 + i });
-    agg.flush(W0 + 100);
+    agg.flush(W0 + BROADCAST_THROTTLE_MS);
     assert.equal(agg.stats().broadcasts, 1);
   });
 });
@@ -224,7 +225,7 @@ test("查询与回收", async (t) => {
     // reset 之后第一次 flush 不该被上一节课的节流时间挡住
     agg.hit({ presetId: "again", id: "b", ts: W1 });
     agg.hit({ presetId: "again", id: "b", ts: W1 + 1 });
-    assert.equal(agg.flush(W1 + 1).length, 1);
+    assert.equal(agg.flush(W1 + BROADCAST_THROTTLE_MS).length, 1);
   });
 
   await t.test("stats 反映真实计数", () => {
@@ -233,7 +234,8 @@ test("查询与回收", async (t) => {
     agg.hit({ presetId: "again", id: "a", ts: W0 + 1 });
     agg.hit({ presetId: "example", id: "b", ts: W0 + 2 });
     agg.hit({ presetId: "example", id: "b", ts: W0 + 3 });
-    agg.flush(W0 + 100);
+    // 两个桶各自"第一次点击"都立刻广播过，节流窗口从最后一次算起
+    agg.flush(W0 + BROADCAST_THROTTLE_MS * 2);
 
     const stats = agg.stats();
     assert.equal(stats.hits, 4);

@@ -59,6 +59,8 @@ export const S2C = Object.freeze({
   HOST_ALERT: "host:alert",
   HOST_IDENTITY: "host:identity",
   ERROR: "error",
+  // §4.3.1 的表格只列了协议主干，下面是补充的两个
+  EXPORT_READY: "export:ready",
 });
 
 export const CLIENT_EVENTS = Object.freeze(Object.values(C2S));
@@ -96,6 +98,16 @@ export const REJECT = Object.freeze({
   BANNED: "banned",
   RATE_LIMITED: "rate_limited",
   PRESET_ONLY: "preset_only",
+});
+
+/** 服务端 error 事件的 code。前端拿它决定是"重连"还是"提示一下就好"。 */
+export const ERROR_CODE = Object.freeze({
+  BAD_MESSAGE: "bad_message",
+  NOT_JOINED: "not_joined",
+  FORBIDDEN: "forbidden",
+  UNKNOWN_EVENT: "unknown_event",
+  NOT_READY: "not_ready",
+  BANNED: "banned",
 });
 
 export function isPlainObject(value) {
