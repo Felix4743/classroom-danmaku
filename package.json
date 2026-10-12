@@ -19,12 +19,18 @@
     "node": ">=20"
   },
   "devDependencies": {
-    "electron": "^44.7.0",
+    "electron": "44.4.3",
     "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "com.classroom.danmaku",
     "productName": "课堂弹幕",
+    "electronVersion": "44.4.3",
+    "electronDist": "node_modules/electron/dist",
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
     "directories": {
       "output": "dist",
       "buildResources": "assets"
