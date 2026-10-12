@@ -3,15 +3,59 @@
   "version": "0.1.0",
   "private": true,
   "description": "课堂弹幕 —— 把大学课堂变成一场可以发弹幕的直播",
+  "author": "课堂弹幕",
   "type": "module",
+  "main": "src/main/index.js",
   "scripts": {
     "test": "node scripts/check-docs.mjs && node --test \"tests/**/*.test.mjs\"",
     "test:docs": "node scripts/check-docs.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "dev": "node scripts/dev-classroom.mjs",
-    "dev:screen": "node scripts/dev-server.mjs"
+    "dev:screen": "node scripts/dev-server.mjs",
+    "desktop": "electron .",
+    "pack": "electron-builder --win portable"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.classroom.danmaku",
+    "productName": "课堂弹幕",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "package.json",
+      "src/main/**/*",
+      "src/shared/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "src/shared",
+        "to": "src/shared"
+      },
+      {
+        "from": "src/overlay",
+        "to": "src/overlay"
+      },
+      {
+        "from": "src/web",
+        "to": "src/web"
+      }
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "portable": {
+      "artifactName": "课堂弹幕-${version}.exe"
+    }
   }
 }
