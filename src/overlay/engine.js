@@ -14,6 +14,15 @@ import { clampConfig, DANMAKU_COLORS, DEFAULT_CONFIG, ENGINE } from "../shared/c
 
 const FONT_STACK = '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif';
 
+/**
+ * 给预置项预留的计数后缀宽度（§4.6）。
+ *
+ * 用 `×88` 而不是 `×1`：两位数是绝大多数课堂会到的量级，按它预留之后，
+ * 计数从 1 涨到 99 都不需要重新量宽度、也不需要动已经排好的轨道。
+ * 真到了三位数，文字会稍微超出预留宽度几像素 —— 比整条轨道重排轻微得多。
+ */
+const AGGREGATE_RESERVE = " ×88";
+
 /** 字号 → CSS font 字符串。每帧不重新拼，缓存在弹幕对象上。 */
 export function fontOf(fontSize) {
   return `${fontSize}px ${FONT_STACK}`;
@@ -154,7 +163,13 @@ export class DanmakuEngine {
     item.ts = payload.ts ?? nowMs;
     item.fontSize = fontSize;
     item.font = fontOf(fontSize);
-    item.width = this.measure(text, fontSize);
+    /*
+     * 预置项的宽度按"带上两位数的计数后缀"来量（§4.6：屏幕上要显示
+     * `没听懂 ×23`）。计数是会涨的，而**宽度一变，轨道几何就跟着变** ——
+     * 已经在后面那条轨道里的弹幕是按老宽度算出来的位置，会突然被压上。
+     * 所以宁可一开始就按最大的后缀预留：数字怎么涨，占的地方都不变。
+     */
+    item.width = this.measure(payload.presetId ? `${text}${AGGREGATE_RESERVE}` : text, fontSize);
     item.speed = speedOf(item.width, this.width, this.config.duration);
     item.lane = -1;
     item.x = this.width;
@@ -178,6 +193,28 @@ export class DanmakuEngine {
     this.waiting.push(item);
     this.stats.queued += 1;
     return { id: item.id, status: "queued" };
+  }
+
+  /**
+   * 改一条弹幕的聚合计数（§4.6：`没听懂 ×23` 里的数字是会长大的）。
+   *
+   * 只改数字，**不动宽度、速度、轨道和位置** —— 和 §4.7 对点赞的处理同一条
+   * 原则：计数是别人的反应，不该让这条弹幕在滚动流里跳一下。
+   * 宽度已经在 push 时按两位数后缀预留好了，所以这里改数字是安全的。
+   *
+   * @returns {boolean} 找到了并改掉返回 true；它已经滚出屏幕则返回 false。
+   */
+  setAggregate(id, count) {
+    if (!id || !Number.isFinite(count)) return false;
+    for (const list of [this.active, this.waiting]) {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].id === id) {
+          list[i].aggregate = count;
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /** 推进一帧。dt 由调用方给出（浏览器用 rAF 时间戳），内部夹住上限。 */
@@ -380,6 +417,8 @@ export class CanvasDanmakuView {
     this.ctx = canvas.getContext("2d", { alpha: true });
     this.dpr = 1;
     this._font = "";
+    /** 是否给文字描边。投影上的可读性靠它，性能不够时第一个关掉的就是它。 */
+    this.outline = true;
   }
 
   /** 按 CSS 尺寸 × devicePixelRatio 重设画布，并把画布尺寸同步给 engine。 */
@@ -402,17 +441,29 @@ export class CanvasDanmakuView {
     ctx.textBaseline = "top";
     ctx.globalAlpha = engine.config.alpha;
 
-    const font = fontOf(engine.config.fontSize);
+    const fontSize = engine.config.fontSize;
+    const font = fontOf(fontSize);
     if (font !== this._font) {
       ctx.font = font;
       this._font = font;
+    }
+    if (this.outline) {
+      // 投影上的弹幕是盖在 PPT 上的，PPT 底色不可预测 —— 纯色文字在浅色
+      // 幻灯片上会直接消失。描边让它在任何底色上都读得出来（§4.2.5 的
+      // 第一把刀就是砍这里，所以它是可关的）。
+      ctx.lineWidth = Math.max(2, Math.round(fontSize / 10));
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.72)";
+      ctx.lineJoin = "round";
     }
 
     const list = engine.active;
     for (let i = 0; i < list.length; i++) {
       const item = list[i];
+      // 计数只有到 2 才有信息量：一个人点「没听懂」写成 ×1 是噪音
+      const label = item.aggregate > 1 ? `${item.text} ×${item.aggregate}` : item.text;
+      if (this.outline) ctx.strokeText(label, item.x, item.y);
       ctx.fillStyle = item.color;
-      ctx.fillText(item.text, item.x, item.y);
+      ctx.fillText(label, item.x, item.y);
     }
     ctx.globalAlpha = 1;
   }

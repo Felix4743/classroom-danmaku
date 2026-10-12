@@ -185,6 +185,67 @@ test("等待队列：没有轨道可用时排队，超过 2 秒丢弃并计数",
   assert.equal(summary.cleared, 0);
 });
 
+test("聚合计数：预置项的宽度按两位后缀预留，数字涨了也不动轨道（§4.6）", () => {
+  const engine = makeEngine();
+  engine.update(0);
+
+  const preset = engine.push(
+    { id: "p1", text: "没听懂", presetId: "not_understood", aggregate: 1 },
+    0,
+  );
+  assert.equal(preset.status, "active");
+  const item = engine.active[0];
+  // 假测量是 text.length * fontSize * 0.6
+  assert.equal(
+    item.width,
+    fakeMeasure("没听懂 ×88", engine.config.fontSize),
+    "预置项要按最大的后缀预留宽度",
+  );
+
+  engine.push({ id: "f1", text: "自己打的字" }, 0);
+  const free = engine.active.find((entry) => entry.id === "f1");
+  assert.equal(
+    free.width,
+    fakeMeasure("自己打的字", engine.config.fontSize),
+    "自由打字不会带计数后缀，不该白占地方",
+  );
+});
+
+test("聚合计数：只改数字，不动位置和速度", () => {
+  const engine = makeEngine();
+  engine.update(0);
+  engine.push({ id: "p1", text: "没听懂", presetId: "not_understood", aggregate: 1 }, 0);
+
+  engine.update(500);
+  const item = engine.active[0];
+  const before = { x: item.x, speed: item.speed, width: item.width, lane: item.lane };
+
+  assert.equal(engine.setAggregate("p1", 23), true);
+  assert.equal(item.aggregate, 23);
+  // §4.7 的同一条原则：别人的反应不该让这条弹幕在滚动流里跳一下
+  assert.equal(item.x, before.x);
+  assert.equal(item.speed, before.speed);
+  assert.equal(item.width, before.width);
+  assert.equal(item.lane, before.lane);
+});
+
+test("聚合计数：排队中的也找得到，滚出屏幕和非法入参返回 false", () => {
+  const engine = makeEngine();
+  // maxDensity 的下限就是 10（clampConfig 会夹），所以先塞满 10 条
+  engine.setConfig({ maxDensity: 10 });
+  engine.update(0);
+  for (let i = 0; i < 10; i += 1) engine.push({ id: `a${i}`, text: "占着轨道" }, 0);
+  assert.equal(engine.active.length, 10);
+  assert.equal(engine.push({ id: "b", text: "没听懂", presetId: "not_understood" }, 0).status, "queued");
+
+  assert.equal(engine.setAggregate("b", 7), true, "排队中的弹幕也要能更新计数");
+  assert.equal(engine.waiting[0].aggregate, 7);
+
+  assert.equal(engine.setAggregate("does-not-exist", 3), false);
+  assert.equal(engine.setAggregate("a0", Number.NaN), false, "NaN 不能写进去，否则画出来是 ×NaN");
+  assert.equal(engine.setAggregate(null, 3), false);
+});
+
 test("对象池：回收的对象会被复用，不会无限增长", () => {
   const engine = makeEngine();
   engine.update(0);
