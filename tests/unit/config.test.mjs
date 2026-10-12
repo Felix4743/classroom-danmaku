@@ -10,12 +10,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CLIENT_SEND_COOLDOWN_MS,
   CONFIG_LIMITS,
   DANMAKU_COLORS,
   DEFAULT_CONFIG,
   clampConfig,
   sanitizeConfig,
 } from "../../src/shared/config.js";
+import { RULES } from "../../src/main/server/ratelimit.js";
 
 test("每个手感参数都必须有默认值、取值范围和中文标签", () => {
   for (const [key, value] of Object.entries(DEFAULT_CONFIG)) {
@@ -96,4 +98,13 @@ test("弹幕颜色是可直接用的 CSS 颜色字符串，且互不相同", () 
   for (const color of DANMAKU_COLORS) {
     assert.match(color, /^#[0-9a-f]{6}$/i, `${color} 不是规整的十六进制颜色`);
   }
+});
+
+test("学生端发送冷却与服务端的最短间隔是同一个数（§4.5）", () => {
+  // 学生页的发送按钮自己禁用 CLIENT_SEND_COOLDOWN_MS，服务端的裁判是
+  // RULES.minIntervalMs。两边改岔了的后果很具体：客户端比服务端松，
+  // 学生就会频繁看到"发得太快了"；比服务端紧，学生就会觉得"我明明没发几条
+  // 却发不出去"。所以这条断言把它钉住 —— 它跨了浏览器代码与服务端代码，
+  // 是唯一能拦住这种漂移的地方。
+  assert.equal(CLIENT_SEND_COOLDOWN_MS, RULES.minIntervalMs);
 });

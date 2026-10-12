@@ -8,7 +8,8 @@
     "test": "node scripts/check-docs.mjs && node --test \"tests/**/*.test.mjs\"",
     "test:docs": "node scripts/check-docs.mjs",
     "check:docs": "node scripts/check-docs.mjs",
-    "dev": "node scripts/dev-server.mjs"
+    "dev": "node scripts/dev-classroom.mjs",
+    "dev:screen": "node scripts/dev-server.mjs"
   },
   "engines": {
     "node": ">=20"

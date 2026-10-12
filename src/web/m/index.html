@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>课堂弹幕</title>
+    <link rel="stylesheet" href="./m.css" />
+  </head>
+  <body>
+    <!-- 加入课堂。唯一一次表单，之后不再出现（§7.2） -->
+    <section id="join" class="join" hidden>
+      <h1>加入课堂</h1>
+      <p class="note">
+        学号和姓名<strong>只有老师能看见</strong>，投影上永远不会出现。<br />
+        昵称是同学看到的名字，留空就是「匿名同学」。
+      </p>
+      <form id="join-form" autocomplete="off">
+        <label for="student-id">学号</label>
+        <input id="student-id" name="studentId" inputmode="text" maxlength="24" required />
+
+        <label for="real-name">姓名</label>
+        <input id="real-name" name="name" maxlength="32" required />
+
+        <label for="nickname">昵称（可留空）</label>
+        <input id="nickname" name="nickname" maxlength="12" placeholder="匿名同学" />
+
+        <button id="join-go" type="submit">进入课堂</button>
+        <p id="join-error" class="error" hidden></p>
+      </form>
+    </section>
+
+    <!-- 主界面 -->
+    <section id="room" class="room" hidden>
+      <header class="bar">
+        <span id="conn" class="conn">连接中…</span>
+        <span id="me" class="me"></span>
+      </header>
+
+      <p id="banner" class="banner" hidden></p>
+
+      <main class="mine-wrap">
+        <h2>我发过的</h2>
+        <ul id="mine" class="mine"></ul>
+        <p id="mine-empty" class="note empty">还没发过。下面点一下就行。</p>
+      </main>
+
+      <footer class="composer">
+        <div id="presets" class="presets"></div>
+        <form id="send-form" class="send" autocomplete="off">
+          <input id="text" maxlength="100" placeholder="也可以自己打字…" />
+          <button id="send" type="submit">发送</button>
+        </form>
+        <p id="cooldown" class="cooldown" hidden></p>
+      </footer>
+    </section>
+
+    <script type="module" src="./m.js"></script>
+  </body>
+</html>

@@ -46,6 +46,18 @@ export const ENGINE = Object.freeze({
   WAIT_QUEUE_MAX: 500,
 });
 
+/**
+ * 学生端发出上一条之后，发送按钮自己禁用的时长（§4.5 的 minIntervalMs）。
+ *
+ * 这是**纯 UX** 那一份：不做的话，学生连点三下会收到三条限流提示，
+ * 而其中两条本来可以不发生。服务端仍然是唯一的裁判 —— 它会回 rateLimited，
+ * 那时前端以服务端给的 retryAfterMs 为准。
+ *
+ * 之所以敢在这里再写一个数字，是因为 `tests/unit/session.test.mjs` 里有一条
+ * 断言钉住它等于服务端 RULES.minIntervalMs，两边改岔了测试会响。
+ */
+export const CLIENT_SEND_COOLDOWN_MS = 3000;
+
 /** 弹幕颜色池。用预解析的字符串，不在每帧拼字符串（§4.2.3）。 */
 export const DANMAKU_COLORS = Object.freeze([
   "#ffffff",
