@@ -48,7 +48,16 @@
         <button type="button" id="reset">恢复默认参数</button>
       </div>
 
+      <div class="row buttons">
+        <button type="button" id="export">复制当前参数</button>
+      </div>
+
+      <pre id="exported" class="exported" hidden></pre>
+
       <p id="verdict" class="verdict" hidden></p>
+      <p class="hint">
+        参数会自动存在本机，刷新不丢。按 <b>H</b> 或「隐藏」把面板收起来看真实观感。
+      </p>
       <p class="hint">
         V0 验收：100 条同屏 ≥ 55 fps。真实场景还要在透明窗口下再跑一次（技术方案 §4.1）。
       </p>

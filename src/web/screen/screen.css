@@ -170,9 +170,30 @@ button.ghost {
   border-color: rgba(255, 168, 168, 0.6);
 }
 
+.exported {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font: 12px/1.6 ui-monospace, Consolas, "Courier New", monospace;
+  white-space: pre-wrap;
+  user-select: all;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.exported[hidden] {
+  display: none;
+}
+
 .hint {
   margin: 8px 0 0;
   color: #6c757d;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.hint b {
+  color: #adb5bd;
 }

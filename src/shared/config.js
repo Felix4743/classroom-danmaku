@@ -67,3 +67,16 @@ export function clampConfig(patch = {}) {
   }
   return next;
 }
+
+/**
+ * 把外部来源（localStorage、URL 参数、将来服务端下发的 config）整理成一份**完整**
+ * 的可用配置：缺的补默认值，越界的夹紧，认不出来的直接丢掉。
+ *
+ * 为什么不敢省这一步：引擎里只要有一处拿到 `NaN` 或 `undefined`，弹幕的坐标就会
+ * 变成 NaN —— 而 Canvas 收到 NaN 坐标时**不报任何错**，只是什么都不画。
+ * 那会表现为"页面白屏但控制台干净"，正是最难查的一类故障。
+ */
+export function sanitizeConfig(value) {
+  if (!value || typeof value !== "object") return { ...DEFAULT_CONFIG };
+  return { ...DEFAULT_CONFIG, ...clampConfig(value) };
+}

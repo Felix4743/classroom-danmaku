@@ -6,7 +6,7 @@
  * 五个滑块实时生效，右上角盯着帧率。
  */
 
-import { CONFIG_LIMITS, DEFAULT_CONFIG } from "../../shared/config.js";
+import { CONFIG_LIMITS, DEFAULT_CONFIG, sanitizeConfig } from "../../shared/config.js";
 import { CanvasDanmakuView, DanmakuEngine, FpsMeter, fontOf } from "../../overlay/engine.js";
 
 const canvas = document.getElementById("stage");
@@ -112,10 +112,7 @@ for (const [key, limit] of Object.entries(CONFIG_LIMITS)) {
   input.value = String(DEFAULT_CONFIG[key]);
   input.dataset.configKey = key;
   input.addEventListener("input", () => {
-    const patch = { [key]: Number(input.value) };
-    engine.setConfig(patch);
-    wrap.querySelector(`[data-value="${key}"]`).textContent = input.value;
-    document.getElementById("hud-lanes").textContent = String(engine.laneCount);
+    applyConfig({ [key]: Number(input.value) });
     if (benchRunning) finishBench("参数已改动，压测作废");
   });
   wrap.appendChild(input);
@@ -123,14 +120,53 @@ for (const [key, limit] of Object.entries(CONFIG_LIMITS)) {
   sliderInputs.set(key, input);
 }
 
-function applyDefaults() {
-  engine.setConfig({ ...DEFAULT_CONFIG });
+/** 把 engine.config 的当前值同步回滑块与轨道数显示。 */
+function syncSliders() {
   for (const [key, input] of sliderInputs) {
-    input.value = String(DEFAULT_CONFIG[key]);
-    document.querySelector(`[data-value="${key}"]`).textContent = input.value;
+    input.value = String(engine.config[key]);
+    document.querySelector(`[data-value="${key}"]`).textContent = String(engine.config[key]);
   }
   document.getElementById("hud-lanes").textContent = String(engine.laneCount);
 }
+
+/**
+ * 改参数的唯一入口。引擎、滑块、localStorage 三处不许各改各的 ——
+ * 手感调参页最容易出的 bug 就是某一处漏同步，然后你对着一个假的读数调半天。
+ */
+function applyConfig(patch) {
+  engine.setConfig(patch); // 内部按 CONFIG_LIMITS 夹紧，非法键直接丢弃
+  syncSliders();
+  saveConfig();
+}
+
+function applyDefaults() {
+  applyConfig({ ...DEFAULT_CONFIG });
+}
+
+// 拖完滑块刷新一下不该白拖。参数存在本地，刷新后原样恢复。
+const STORAGE_KEY = "classroom-danmaku.v0.config";
+
+function saveConfig() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(engine.config));
+  } catch {
+    /* 隐私模式或配额满会抛异常，不能让它影响调参 */
+  }
+}
+
+function loadSavedConfig() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null");
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// 恢复必须在滑块建好之后。这里也**不能**碰压测的那批变量，它们还在 TDZ 里。
+// sanitizeConfig 兜住 localStorage 被手改坏 / 旧版本残留字段的情况。
+const restored = loadSavedConfig();
+if (restored) applyConfig(sanitizeConfig(restored));
 
 // ── 控件 ─────────────────────────────────────────────────────────────────────
 
@@ -172,6 +208,23 @@ demoButton.addEventListener("click", () => {
 });
 
 document.getElementById("reset").addEventListener("click", applyDefaults);
+
+// ── 导出参数 ─────────────────────────────────────────────────────────────────
+// 调完手感要把结果原样贴回给实现方，所以这里输出的就是引擎正在用的那一份。
+
+const exportedBox = document.getElementById("exported");
+
+document.getElementById("export").addEventListener("click", async () => {
+  const json = JSON.stringify(engine.config, null, 2);
+  exportedBox.hidden = false;
+  try {
+    // 走 127.0.0.1 时是安全上下文；但用局域网 IP 打开时 navigator.clipboard 不存在
+    await navigator.clipboard.writeText(json);
+    exportedBox.textContent = `${json}\n\n（已复制到剪贴板）`;
+  } catch {
+    exportedBox.textContent = `${json}\n\n（自动复制不可用，请手动选中上面这段）`;
+  }
+});
 
 const panel = document.getElementById("panel");
 const hideButton = document.getElementById("hide");
