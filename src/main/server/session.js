@@ -19,7 +19,8 @@
 
 import { randomUUID } from "node:crypto";
 import { DEFAULT_CONFIG, DANMAKU_COLORS, sanitizeConfig } from "../../shared/config.js";
-import { presetById } from "../../shared/presets.js";
+import { presetById, PRESETS } from "../../shared/presets.js";
+import { humanTime } from "../store.js";
 import {
   C2S,
   CLIENT_EVENTS,
@@ -80,6 +81,9 @@ export function createSession(options = {}) {
 
   let seq = 0;
   let colorCursor = 0;
+  // 这节课的开始时间。落盘文件名与导出摘要的标题都靠它 ——
+  // 用第一次 drain 的时间不行：老师可能先开机、过几分钟才开始上课
+  const startedAt = clock();
 
   const counts = { accepted: 0, filtered: 0, rateLimited: 0, removed: 0, kicked: 0 };
 
@@ -686,13 +690,51 @@ export function createSession(options = {}) {
     }
   }
 
+  /**
+   * 落盘/导出的完整数据（§5.2）。
+   *
+   * 与发给任何客户端的载荷都不同：**这里带身份**。投影和同学看到的永远是
+   * 匿名的（§4.4 的红线由协议层保证），但落盘文件是给老师做追溯用的，
+   * §4.9 明确说了"对同学匿名，对老师可追溯"。少了 studentId，这节课的数据
+   * 就只剩一堆无法追责的字符串。
+   *
+   * 被删除的弹幕也保留（`removed: true`）—— 老师撤下来的内容恰恰是最需要
+   * 事后能查的东西，从导出里抹掉等于销毁证据。
+   */
   function exportData() {
     return {
       schema: 1,
+      classId: startedAt ? `${humanTime(startedAt)}` : null,
+      startedAt,
+      endedAt: clock(),
       exportedAt: clock(),
       config: configPayload(),
       stats: stats(),
-      danmaku: visibleItems().map(hostItem),
+      presets: PRESETS.map((preset) => ({ id: preset.id, label: preset.label })),
+      danmaku: order.map((id) => exportItem(items.get(id))).filter(Boolean),
+    };
+  }
+
+  /** 单条弹幕的落盘形态：公开字段 + 管理字段 + 身份。 */
+  function exportItem(item) {
+    if (!item) return null;
+    const device = devices.get(item.deviceId);
+    return {
+      seq: item.seq,
+      text: item.text,
+      presetId: item.presetId ?? null,
+      nickname: item.nickname,
+      color: item.color,
+      ts: item.ts,
+      likes: item.likeCount,
+      aggregate: item.aggregate ?? 0,
+      pinned: Boolean(item.pinned),
+      resolved: Boolean(item.resolved),
+      removed: Boolean(item.removed),
+      removedReason: item.removedReason ?? null,
+      studentId: device?.identity?.studentId ?? null,
+      name: device?.identity?.name ?? null,
+      deviceId: item.deviceId,
     };
   }
 

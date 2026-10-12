@@ -15,9 +15,29 @@ import { createHub } from "./hub.js";
 import { createSession } from "./session.js";
 import { homePage, pageMounts } from "./routes.js";
 import { redirectTo, startHttpServer } from "./http.js";
+import { createInfoRoute, DEFAULT_STUDENT_PATH } from "./info.js";
+import { createStore, renderMarkdown, sessionFileName } from "../store.js";
 
 /** 连接被踢掉时给对端的关闭码：1008 = policy violation，"你不该在这儿"。 */
 export const KICK_CLOSE_CODE = 1008;
+
+/**
+ * 老师按下导出（§4.11）。
+ *
+ * 这个函数**必须同步返回**：会话层是同步的（`drain()` 一次吐出一批消息），
+ * 让导出变成异步会把整条链路都染上 Promise，代价远大于收益。所以这里同步
+ * 算好摘要、同步推出两个文件名，把真正的写盘丢到后台 —— 老师手机上立刻
+ * 就能读到摘要，文件几毫秒后落盘。
+ */
+function exportNow(store, data, logger) {
+  const base = sessionFileName(Number(data?.exportedAt) || Date.now()).replace(/\.json$/, "");
+  const markdown = renderMarkdown(data);
+  // store.exportTo 自己吞掉所有异常（磁盘满不能中断上课），这里只是兜底
+  Promise.resolve(store.exportTo(data)).catch((err) =>
+    logger.error?.("[start] 导出失败", err),
+  );
+  return { markdown, jsonPath: `exports/${base}.json`, mdPath: `exports/${base}.md` };
+}
 
 export async function startClassroom(options = {}) {
   const {
@@ -29,11 +49,28 @@ export async function startClassroom(options = {}) {
     logger = console,
     session: sessionOptions = {},
     clock,
+    /** 只给测试用：把假网卡喂进来，避免测试结果依赖跑测试的那台机器。 */
+    interfaces,
+    /**
+     * 数据目录。给了才落盘 —— 不给就是纯内存，`npm test` 里跑起来的服务
+     * 不会往仓库里写文件。真跑一节课时由入口（Electron / dev-classroom）
+     * 传 `data`，相对 exe 所在目录（§4.11）。
+     */
+    dataDir = null,
+    /** 自动落盘间隔（§4.11：每 30 秒）。0 表示关闭。 */
+    autosaveMs = 30_000,
+    /** 只给测试用：自定义落盘器。 */
+    store = null,
   } = options;
 
   if (!staticRoot) throw new TypeError("startClassroom 需要 staticRoot（通常是 src/）");
 
   const { mounts, pages } = pageMounts(staticRoot);
+
+  // 端口要等 listen 成功才知道（3000 被占用时会递增，§7.4），
+  // 而路由必须在这之前注册好 —— 所以用一个取值函数把两边接起来
+  const state = { port };
+  const studentPath = pages.includes(DEFAULT_STUDENT_PATH) ? DEFAULT_STUDENT_PATH : null;
 
   const http = await startHttpServer({
     port,
@@ -43,11 +80,30 @@ export async function startClassroom(options = {}) {
     mounts,
     // 首页送到调参页。老师真正要用的 /host 和 /m 都挂在各自目录下，
     // 这个跳转只是为了"随手打开根地址时不要看到 404"
-    routes: { "/": redirectTo(`${homePage(pages)}/`) },
+    routes: {
+      "/": redirectTo(`${homePage(pages)}/`),
+      "/api/info": createInfoRoute({
+        getPort: () => state.port,
+        getOnline: () => session.stats().online,
+        studentPath: studentPath ?? DEFAULT_STUDENT_PATH,
+        interfaces,
+        logger,
+        ...(clock ? { clock } : {}),
+      }),
+    },
     logger,
   });
 
-  const session = createSession({ logger, ...(clock ? { clock } : {}), ...sessionOptions });
+  state.port = http.port;
+
+  const persistence = store ?? (dataDir ? createStore({ dir: dataDir, logger }) : null);
+
+  const session = createSession({
+    logger,
+    ...(clock ? { clock } : {}),
+    ...sessionOptions,
+    ...(persistence ? { onExport: (data) => exportNow(persistence, data, logger) } : {}),
+  });
   const hub = createHub({ session, logger, ...(clock ? { clock } : {}) });
 
   const ws = attachWebSocket({
@@ -74,6 +130,16 @@ export async function startClassroom(options = {}) {
 
   hub.start();
 
+  // 定时落盘（§4.11）。unref 掉：这个定时器不该让进程活着，
+  // 老师在讲完课后点关闭，程序必须能干净退出（§7.4 "不留后台进程"）
+  let autosaveTimer = null;
+  if (persistence && autosaveMs > 0) {
+    autosaveTimer = setInterval(() => {
+      persistence.save(session.exportData());
+    }, autosaveMs);
+    autosaveTimer.unref?.();
+  }
+
   return {
     server: http.server,
     port: http.port,
@@ -85,9 +151,14 @@ export async function startClassroom(options = {}) {
     pages,
     mounts,
     /** 这个地址是学生页，二维码指向的就是它。 */
-    studentPath: pages.includes("/m") ? "/m" : null,
+    studentPath,
+    /** 老师页要拿它去问"学生该扫哪个地址"（§4.10）。 */
+    infoPath: "/api/info",
+    /** 落盘器。没配 dataDir 时为 null（纯内存）。 */
+    store: persistence,
 
     async close() {
+      if (autosaveTimer) clearInterval(autosaveTimer);
       hub.close();
       ws.close();
       http.server.closeAllConnections?.();

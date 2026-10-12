@@ -105,6 +105,22 @@ function sendText(res, status, body, headers = {}) {
   res.end(payload);
 }
 
+/**
+ * JSON 响应。`Content-Length` 必须按**字节数**算，不能按字符串长度 ——
+ * 中文一个字是 3 字节，写错了浏览器会截断在半个字符上。
+ */
+export function sendJson(res, status, data, headers = {}) {
+  const payload = Buffer.from(JSON.stringify(data), "utf8");
+  res.writeHead(status, {
+    "Content-Type": MIME_TYPES[".json"],
+    "Content-Length": payload.length,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    ...headers,
+  });
+  res.end(payload);
+}
+
 async function sendFile(req, res, filePath) {
   let info;
   try {

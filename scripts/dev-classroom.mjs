@@ -20,6 +20,9 @@ const classroom = await startClassroom({
   staticRoot: STATIC_ROOT,
   port: Number(process.env.PORT ?? 3000),
   host: process.env.HOST ?? "0.0.0.0",
+  // 和真实交付一样落盘（§4.11）：每 30 秒 + 老师导出时写一份到 data/。
+  // 开发期就打开，是为了让"导出按钮点了没反应"这类问题在讲台上出现之前先暴露
+  dataDir: process.env.DATA_DIR ?? join(ROOT, "data"),
 });
 
 const { best, candidates, warnings } = pickAddress(undefined, { port: classroom.port });
@@ -27,12 +30,15 @@ const { best, candidates, warnings } = pickAddress(undefined, { port: classroom.
 console.log(`[dev] 静态根目录：${STATIC_ROOT}`);
 console.log(`[dev] 挂载点：${Object.keys(classroom.mounts).sort().join(", ")}`);
 console.log("");
-console.log(`[dev] 本机开这两个（就是这台电脑自己）：`);
-console.log(`        手感调参页  http://127.0.0.1:${classroom.port}/screen/`);
+console.log("[dev] 本机开这几个（就是这台电脑自己）：");
+console.log(`        投影/弹幕层  http://127.0.0.1:${classroom.port}/screen/`);
+console.log(`        老师端       http://127.0.0.1:${classroom.port}/host/`);
 if (classroom.studentPath) {
-  console.log(`        学生页      http://127.0.0.1:${classroom.port}${classroom.studentPath}/`);
+  console.log(`        学生页       http://127.0.0.1:${classroom.port}${classroom.studentPath}/`);
 }
+console.log(`        手感调参页   http://127.0.0.1:${classroom.port}/tune/`);
 console.log("");
+console.log(`[dev] 落盘目录：${classroom.store?.dir ?? "（未开启）"}`);
 
 if (best) {
   console.log(`[dev] 手机扫这个（学生会用到的地址）：`);
