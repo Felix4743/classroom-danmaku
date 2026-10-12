@@ -16,15 +16,19 @@
  */
 
 import { fileURLToPath } from "node:url";
-import { appendFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
 
 import { Menu, Tray, app, nativeImage, shell } from "electron";
 
+import { hardenConsole, installCrashLog } from "./crash-log.js";
 import { dataDirFor, logDirFor, staticRootFor } from "./desktop-paths.js";
 import { TRAY_ICON_DATA_URL } from "./icon.js";
 import { createOverlay } from "./overlay.js";
 import { startClassroom } from "./server/start.js";
+
+// 第一件事：让 console 永不抛。
+// 桌面程序的控制台根本不可靠（双击启动的 exe 压根没有控制台，被脚本拉起来时
+// 管道随时会断），而"写日志把自己写崩"会自激成死循环 —— 详见 crash-log.js 顶部。
+hardenConsole();
 
 // Windows 的"原生窗口遮挡检测"会把不当焦点、又被别的窗口盖住的窗口判成不可见，
 // 然后停掉它的渲染。弹幕层永远拿不到焦点，也永远被别人"盖住"（我们才是上面那层），
@@ -64,23 +68,9 @@ function resolvePaths() {
 }
 
 /** 崩溃日志写 U 盘（§7.4）。老师拔着 U 盘来上课，日志必须跟着走。 */
-function installCrashLog(logDir) {
-  const write = (tag, error) => {
-    try {
-      mkdirSync(logDir, { recursive: true });
-      appendFileSync(join(logDir, "crash.log"), `[${new Date().toISOString()}] ${tag} ${error?.stack ?? error}\n`, "utf8");
-    } catch {
-      // 连日志都写不下去（U 盘拔了/写保护），这时候能做的只有别让程序再崩一次
-    }
-  };
-  process.on("uncaughtException", (error) => {
-    write("uncaughtException", error);
-    console.error("[main] 未捕获异常", error);
-  });
-  process.on("unhandledRejection", (reason) => {
-    write("unhandledRejection", reason);
-    console.error("[main] 未处理的 Promise 拒绝", reason);
-  });
+function installCrashHandlers(logDir) {
+  // 实现和事故经过在 crash-log.js：日志本身绝不能成为新的故障源
+  installCrashLog(process, { logDir });
 }
 
 function quit() {
@@ -141,7 +131,7 @@ function buildTray(classroom) {
 
 async function main() {
   const { dataDir, logDir, staticRoot } = resolvePaths();
-  installCrashLog(logDir);
+  installCrashHandlers(logDir);
   console.log(`[main] 数据目录：${dataDir}`);
   console.log(`[main] 静态根目录：${staticRoot}`);
 
