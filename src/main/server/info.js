@@ -32,6 +32,7 @@ export const DEFAULT_OVERLAY_PATH = "/screen/";
  * @param {string} [options.overlayPath] 弹幕层路径
  * @param {number} [options.online] 当前在线人数，老师要靠它判断"到底有没有人连上"
  * @param {number} [options.now] 服务端毫秒时间戳
+ * @param {string[]} [options.extraWarnings] 网卡之外还要提醒老师的事（比如防火墙没放行）
  */
 export function infoPayload(options = {}) {
   const {
@@ -41,6 +42,7 @@ export function infoPayload(options = {}) {
     overlayPath = DEFAULT_OVERLAY_PATH,
     online = 0,
     now = 0,
+    extraWarnings = [],
   } = options;
 
   const { best, candidates, warnings } = pickAddress(interfaces, { port });
@@ -60,7 +62,7 @@ export function infoPayload(options = {}) {
     overlayPath,
     best: best ? withStudentUrl(best) : null,
     candidates: candidates.map(withStudentUrl),
-    warnings,
+    warnings: [...warnings, ...(Array.isArray(extraWarnings) ? extraWarnings : [])],
   };
 }
 
@@ -75,6 +77,7 @@ export function createInfoRoute(options = {}) {
   const {
     getPort,
     getOnline = () => 0,
+    getExtraWarnings = () => [],
     studentPath = DEFAULT_STUDENT_PATH,
     overlayPath = DEFAULT_OVERLAY_PATH,
     interfaces,
@@ -98,6 +101,7 @@ export function createInfoRoute(options = {}) {
           overlayPath,
           online: getOnline(),
           now: clock(),
+          extraWarnings: getExtraWarnings(),
         }),
       );
     } catch (err) {

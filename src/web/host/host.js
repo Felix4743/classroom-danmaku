@@ -45,6 +45,7 @@ const dom = {
   joinQr: document.getElementById("join-qr"),
   joinUrl: document.getElementById("join-url"),
   joinHint: document.getElementById("join-hint"),
+  joinNotice: document.getElementById("join-notice"),
   joinWarn: document.getElementById("join-warn"),
   joinNext: document.getElementById("join-next"),
   pool: document.getElementById("pool"),
@@ -353,7 +354,12 @@ const handlers = {
 function renderJoinCard() {
   const picker = joinCard;
   paintJoinCard(
-    { canvas: dom.joinQr, urlText: dom.joinUrl, hintText: dom.joinHint },
+    {
+      canvas: dom.joinQr,
+      urlText: dom.joinUrl,
+      hintText: dom.joinHint,
+      noticeText: dom.joinNotice,
+    },
     picker?.current ?? null,
     { best: picker?.best ?? null },
   );

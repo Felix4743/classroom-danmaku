@@ -149,6 +149,48 @@ test("createInfoRoute", async (t) => {
     assert.equal(again.status, 500);
   });
 
+  await t.test("getExtraWarnings：防火墙没放行时那句话要出现在 warnings 里", async () => {
+    // 现场故障：老师扫了码、手机一直转圈，因为便携版每次解压到新的随机临时目录，
+    // 防火墙按程序路径放行的那条规则下一次启动就失效了。二维码本身是对的，
+    // 唯一能提醒老师的地方就是这里。
+    const warnings = ["防火墙没有放行本程序（当前网络配置：Public），学生连不上"];
+    const started = await serve(t, {
+      routes: {
+        "/api/info": createInfoRoute({
+          getPort: () => 3000,
+          interfaces: fakeInterfaces(),
+          getExtraWarnings: () => warnings,
+          logger: { error() {} },
+        }),
+      },
+    });
+    const res = await request(started.url, "/api/info");
+    const info = JSON.parse(res.body);
+    // 网卡自己的警告要留着，额外的那条要接在后面
+    assert.equal(info.warnings.at(-1), warnings[0]);
+  });
+
+  await t.test("getExtraWarnings：每次请求现问，不缓存", async () => {
+    // 自检是启动后异步跑的，老师打开老师端时它可能还没回来 ——
+    // 缓存住空数组就等于永远不提醒。
+    const box = { warnings: [] };
+    const started = await serve(t, {
+      routes: {
+        "/api/info": createInfoRoute({
+          getPort: () => 3000,
+          interfaces: fakeInterfaces(),
+          getExtraWarnings: () => box.warnings,
+          logger: { error() {} },
+        }),
+      },
+    });
+    const before = JSON.parse((await request(started.url, "/api/info")).body).warnings;
+    assert.ok(!before.includes("防火墙没放行"));
+    box.warnings = ["防火墙没放行"];
+    const after = JSON.parse((await request(started.url, "/api/info")).body).warnings;
+    assert.equal(after.at(-1), "防火墙没放行");
+  });
+
   await t.test("只认 GET，别的动词 405", async () => {
     const started = await serve(t, {
       routes: {

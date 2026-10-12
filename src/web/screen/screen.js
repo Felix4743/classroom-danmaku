@@ -57,6 +57,7 @@ const dom = {
   joinQr: document.getElementById("join-qr"),
   joinUrl: document.getElementById("join-url"),
   joinHint: document.getElementById("join-hint"),
+  joinNotice: document.getElementById("join-notice"),
 };
 
 // 类挂在 <html> 上而不是 <body>：决定画布底色的是 html，
@@ -208,7 +209,12 @@ async function loadJoinCard() {
     const info = await loadServerInfo();
     joinPicker = createAddressPicker(info);
     paintJoinCard(
-      { canvas: dom.joinQr, urlText: dom.joinUrl, hintText: dom.joinHint },
+      {
+        canvas: dom.joinQr,
+        urlText: dom.joinUrl,
+        hintText: dom.joinHint,
+        noticeText: dom.joinNotice,
+      },
       joinPicker.current,
       { best: info?.best ?? null },
     );

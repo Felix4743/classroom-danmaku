@@ -122,14 +122,30 @@ export function describeChoice(choice, options = {}) {
 export const NO_ADDRESS_HINT = "没查到能给学生用的地址，请在电脑上看一眼网络连接";
 
 /**
+ * 二维码下面那句必须一直挂着的话。
+ *
+ * 二维码里装的是 `10.x` / `192.168.x` 这种内网地址，只有"和这台电脑在同一个
+ * 局域网里"的手机才路由得到 —— 用手机流量的话，码扫得再准也是转圈打不开。
+ * 这句话是现场实测（老师报「二维码完全不能用」）之后补的：当时二维码本身
+ * 没有任何问题，手机在流量上，地址压根到不了。
+ *
+ * 服务端无从知道学生的手机连在哪个网上，所以这句只能无条件常驻，不能靠检测。
+ */
+export const LAN_NOTICE = "学生手机要连和这台电脑同一个 Wi-Fi（手机流量打不开这个地址）";
+
+/**
  * 二维码和地址要有地方画、有地方写。用户节点一律"给就给、没给就跳过"，
  * 这样老师端和投影页可以只挂自己需要的部分。
  *
- * @param {{canvas?: object, urlText?: object, hintText?: object}} target
+ * @param {{canvas?: object, urlText?: object, hintText?: object, noticeText?: object}} target
  */
 export function paintJoinCard(target, choice, options = {}) {
-  const { canvas, urlText, hintText } = target ?? {};
+  const { canvas, urlText, hintText, noticeText } = target ?? {};
   const { best = null } = options;
+
+  // 联络方式那句和有没有二维码无关：一个地址都没查到的时候，学生更得知道
+  // "要连同一个网"，否则他们会一直怀疑是自己手机的问题。
+  if (noticeText) noticeText.textContent = LAN_NOTICE;
 
   if (!choice?.studentUrl) {
     if (canvas) clearCanvas(canvas);

@@ -15,6 +15,7 @@
  * 并且白白磨损 U 盘，换不来任何好处。
  */
 
+import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,7 @@ import { Menu, Tray, app, globalShortcut, nativeImage, shell } from "electron";
 
 import { hardenConsole, installCrashLog } from "./crash-log.js";
 import { dataDirFor, logDirFor, staticRootFor } from "./desktop-paths.js";
+import { allowRuleArgs, checkFirewall, elevateArgs } from "./firewall.js";
 import { TRAY_ICON_DATA_URL } from "./icon.js";
 import { createOverlay } from "./overlay.js";
 import { startClassroom } from "./server/start.js";
@@ -39,7 +41,22 @@ app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
-const state = { classroom: null, overlay: null, tray: null, quitting: false, refreshTray: null };
+const state = {
+  classroom: null,
+  overlay: null,
+  tray: null,
+  /**
+   * 最近一次防火墙自检的结论（`src/main/firewall.js`）。`null` = 还没查完。
+   *
+   * 现场真实故障：老师扫了码、手机打开链接，然后**一直转圈**。二维码是对的，
+   * U 盘版却每次启动都解压到新的随机临时目录，Windows 防火墙按程序路径放行，
+   * 于是上一次点「允许访问」建出来的规则，下一次启动就指向一个不存在的路径。
+   * 现在打包配置钉死了目录名（根治），这个自检是安全网。
+   */
+  firewall: null,
+  quitting: false,
+  refreshTray: null,
+};
 
 /**
  * 老师手动选的弹幕层级别记在 `data/overlay.json`。
@@ -106,6 +123,60 @@ function installCrashHandlers(logDir) {
   installCrashLog(process, { logDir });
 }
 
+/**
+ * 学生连不上时，把原因透到 `/api/info` 的 `warnings` 里。
+ *
+ * 只报"确凿没放行"这一种情况：查不出来（`unknown`）时闭嘴 ——
+ * 误报会让老师学会无视提示，那这个功能就白做了。
+ */
+function firewallWarnings() {
+  const verdict = state.firewall;
+  if (!verdict || verdict.ok) return [];
+  return [verdict.reason, verdict.hint].filter(Boolean);
+}
+
+/**
+ * 启动后异步自检防火墙。
+ *
+ * 刻意**不挡启动**：查一次要两三秒（枚举几百条规则），而老师站在讲台上等的是
+ * 服务起来，不是这份体检报告。查完刷新托盘，菜单项自己会变。
+ */
+async function runFirewallCheck(port) {
+  const verdict = await checkFirewall({ exePath: process.execPath, port });
+  state.firewall = verdict;
+  if (verdict.unknown) console.log(`[main] 防火墙自检没结论：${verdict.reason ?? "未知原因"}`);
+  else if (verdict.ok) console.log(`[main] 防火墙：${verdict.reason}`);
+  else console.warn(`[main] ⚠ ${verdict.reason}（${verdict.hint}）`);
+  state.refreshTray?.();
+  return verdict;
+}
+
+/**
+ * 一键放行：弹一次 UAC，跑一条 netsh 规则，然后重新自检。
+ *
+ * 规则用 `localport=any` 按程序放行，不把端口钉死 —— 服务端口被占用时会自动
+ * 递增（§7.4），钉死端口的规则在递增那天就失效了。读到结果前不假装成功。
+ */
+function allowThroughFirewall(port) {
+  const args = elevateArgs(allowRuleArgs({ exePath: process.execPath, port }));
+  console.log("[main] 正在申请管理员权限放行防火墙…");
+  let child;
+  try {
+    child = spawn("powershell", args, { windowsHide: true });
+  } catch (error) {
+    console.error("[main] 拉不起来提权进程", error);
+    return;
+  }
+  child.on("error", (error) => console.error("[main] 放行防火墙失败", error));
+  child.on("exit", async (code) => {
+    if (code !== 0) {
+      // 老师点了「否」，或者 UAC 被策略挡了。不改口，重新自检说真话。
+      console.warn(`[main] 放行防火墙没成功（退出码 ${code}）`);
+    }
+    await runFirewallCheck(port);
+  });
+}
+
 function quit() {
   state.quitting = true;
   globalShortcut.unregisterAll();
@@ -164,6 +235,24 @@ async function setOverlayLevel(level) {
   state.refreshTray?.();
 }
 
+/**
+ * 防火墙那几行托盘菜单。
+ *
+ * 三态各有各的说法：还没查完就说在查，放行了就报平安（查不出来时也报平安 ——
+ * 但要说清是"没查出来"），确凿没放行才报警并给出一个能点的动作。
+ */
+function firewallMenuItems(port) {
+  const verdict = state.firewall;
+  if (!verdict) return [{ label: "防火墙：正在检查…", enabled: false }];
+  if (verdict.ok) {
+    return [{ label: verdict.unknown ? "防火墙：没查出来（不影响用）" : "防火墙：已放行", enabled: false }];
+  }
+  return [
+    { label: "⚠ 学生连不上：点这里放行防火墙", click: () => allowThroughFirewall(port) },
+    { label: `　${verdict.reason}`, enabled: false },
+  ];
+}
+
 function menuTemplate(classroom) {
   const base = `${classroom.url}/`;
   const open = (path) => shell.openExternal(`${base}${path}`);
@@ -202,6 +291,7 @@ function menuTemplate(classroom) {
       ],
     },
     { type: "separator" },
+    ...firewallMenuItems(classroom.port),
     { label: `学生地址：${classroom.studentUrl ?? "见 /api/info"}`, enabled: false },
     { label: "打开数据目录", click: () => shell.openPath(classroom.store?.dir ?? "") },
     { type: "separator" },
@@ -245,9 +335,16 @@ async function main() {
     port: Number(process.env.PORT) || 3000,
     host: process.env.HOST || "0.0.0.0",
     dataDir,
+    // 防火墙没放行时说给老师听（老师端和投影页都会读到这条）
+    getExtraWarnings: firewallWarnings,
   });
   state.classroom = classroom;
   console.log(`[main] 课堂服务：${classroom.url}（监听端口 ${classroom.port}）`);
+
+  // 自检不挡启动，查完自己刷托盘（见 runFirewallCheck）
+  runFirewallCheck(classroom.port).catch((error) =>
+    console.warn("[main] 防火墙自检出错", error?.message ?? error),
+  );
 
   // 学生地址：给托盘菜单和日志用。取不到也不影响上课（老师页里还能看到）。
   try {

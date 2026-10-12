@@ -61,6 +61,11 @@ export async function startClassroom(options = {}) {
     autosaveMs = 30_000,
     /** 只给测试用：自定义落盘器。 */
     store = null,
+    /**
+     * 除网卡之外的额外提醒（比如"防火墙没放行，学生连不上"）。
+     * 做成取值函数而不是数组：防火墙自检要两三秒，老师打开老师端时它可能还没回来。
+     */
+    getExtraWarnings = () => [],
   } = options;
 
   if (!staticRoot) throw new TypeError("startClassroom 需要 staticRoot（通常是 src/）");
@@ -88,6 +93,7 @@ export async function startClassroom(options = {}) {
         studentPath: studentPath ?? DEFAULT_STUDENT_PATH,
         interfaces,
         logger,
+        getExtraWarnings,
         ...(clock ? { clock } : {}),
       }),
     },

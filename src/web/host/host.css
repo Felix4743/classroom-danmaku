@@ -416,6 +416,22 @@ body {
   user-select: all;
 }
 
+/*
+ * 「学生要连同一个 Wi-Fi」。这是现场踩坑之后补的：老师报「二维码完全不能用」，
+ * 查下来二维码一个模块都没错，是学生手机在流量上，内网地址压根到不了。
+ * 所以它不是一个提示，是这张卡片成立的前提，用强调色常驻，不给它 hidden 的机会。
+ */
+.notice {
+  color: var(--accent);
+}
+
+.join-notice {
+  margin: 6px 0 0;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .warn {
   margin: 6px 0;
   color: var(--warn);

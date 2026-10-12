@@ -11,6 +11,7 @@ import test, { describe } from "node:test";
 
 import {
   AUTO_HIDE_MS,
+  LAN_NOTICE,
   NO_ADDRESS_HINT,
   addressChoices,
   createAddressPicker,
@@ -184,9 +185,14 @@ describe("describeChoice", () => {
 });
 
 describe("paintJoinCard", () => {
-  test("有地址时：画二维码、写网址、写说明", () => {
+  test("有地址时：画二维码、写网址、写说明、写「同一个 Wi-Fi」", () => {
     const qr = fakeCanvas();
-    const target = { canvas: qr.canvas, urlText: { textContent: "" }, hintText: { textContent: "" } };
+    const target = {
+      canvas: qr.canvas,
+      urlText: { textContent: "" },
+      hintText: { textContent: "" },
+      noticeText: { textContent: "" },
+    };
     const best = lanCandidate("10.0.0.5", "WLAN");
 
     const painted = paintJoinCard(target, best, { best });
@@ -194,25 +200,47 @@ describe("paintJoinCard", () => {
     assert.equal(painted, best);
     assert.equal(target.urlText.textContent, "http://10.0.0.5:3000/m");
     assert.equal(target.hintText.textContent, "推荐 · WLAN · 10.0.0.5");
+    assert.equal(target.noticeText.textContent, LAN_NOTICE);
     // 整块静区一笔 + 每个深色模块一笔，远多于 1
     assert.ok(qr.calls.length > 100, `只画了 ${qr.calls.length} 笔`);
     assert.equal(qr.calls[0][0], "fillRect");
   });
 
-  test("没有地址时：清空画布、只留一句解释，返回 null", () => {
+  test("没有地址时：清空画布、只留一句解释，返回 null，但「同一个 Wi-Fi」照样写", () => {
     const qr = fakeCanvas();
-    const target = { canvas: qr.canvas, urlText: { textContent: "旧网址" }, hintText: { textContent: "" } };
+    const target = {
+      canvas: qr.canvas,
+      urlText: { textContent: "旧网址" },
+      hintText: { textContent: "" },
+      noticeText: { textContent: "" },
+    };
 
     assert.equal(paintJoinCard(target, null), null);
     assert.deepEqual(qr.calls, [["clearRect", 0, 0, 176, 176]]);
     assert.equal(target.urlText.textContent, "");
     assert.equal(target.hintText.textContent, NO_ADDRESS_HINT);
+    // 一个地址都查不到的时候，学生更得知道是"网不一样"，而不是"我手机有问题"
+    assert.equal(target.noticeText.textContent, LAN_NOTICE);
   });
 
   test("只给了一部分节点也不炸（老师端和投影页挂的东西不一样）", () => {
     assert.doesNotThrow(() => paintJoinCard({}, lanCandidate("10.0.0.5")));
     assert.doesNotThrow(() => paintJoinCard(undefined, null));
     assert.doesNotThrow(() => paintJoinCard({ canvas: { width: 8, height: 8 } }, null));
+  });
+});
+
+describe("局域网前提那句话", () => {
+  // 现场实测（老师报「二维码完全不能用」）之后钉的钉子：二维码里装的是内网地址，
+  // 学生手机在移动数据上时公网路由不到，码解得再准也打不开。
+  // 这句话是唯一能防住这件事的东西 —— 服务端无从知道手机连在哪个网上。
+  test("必须同时点出「同一个 Wi-Fi」和「流量不行」", () => {
+    assert.match(LAN_NOTICE, /Wi-?Fi/i);
+    assert.match(LAN_NOTICE, /流量/);
+  });
+
+  test("不能是空串，也不能是默认隐藏的那种提示", () => {
+    assert.ok(LAN_NOTICE.length >= 12, "太短了，讲台上没人看得懂");
   });
 });
 

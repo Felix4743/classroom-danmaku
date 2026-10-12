@@ -62,7 +62,8 @@
       "icon": "assets/icon.png"
     },
     "portable": {
-      "artifactName": "课堂弹幕-${version}.exe"
+      "artifactName": "课堂弹幕-${version}.exe",
+      "unpackDirName": "课堂弹幕"
     }
   }
 }

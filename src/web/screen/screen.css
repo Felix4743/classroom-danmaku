@@ -155,6 +155,20 @@ html.mode-overlay .status {
   font-size: 13px;
 }
 
+/*
+ * 「学生要连同一个 Wi-Fi」—— 二维码成立的前提条件，不是可选提示。
+ * 现场实测：老师报「二维码完全不能用」，二维码本身一个模块都没错，
+ * 是学生手机在移动数据上，10.x 的内网地址公网根本路由不到。
+ * 投影上这一句必须看得清，用暖色（--warn 那一档）区别于灰色的地址说明。
+ */
+.join-notice {
+  margin: 6px 0 0;
+  max-width: 250px;
+  color: #ffd76a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 html.mode-overlay .join {
   /* 透明窗口里这层底是叠在 PPT 上的，得再淡一点，别像贴了张纸 */
   background: rgba(12, 14, 18, 0.72);
