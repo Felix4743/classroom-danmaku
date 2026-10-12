@@ -109,7 +109,7 @@ async function connect(classroom, role, extra = {}) {
   };
 }
 
-test("根地址跳到调参页，调参页与它的资源都取得到", async (t) => {
+test("根地址跳到投影页，投影页与它的资源都取得到", async (t) => {
   const classroom = await startStack(t);
 
   const home = await fetch(`http://127.0.0.1:${classroom.port}/`, { redirect: "manual" });
@@ -119,7 +119,7 @@ test("根地址跳到调参页，调参页与它的资源都取得到", async (t
   const page = await fetch(`http://127.0.0.1:${classroom.port}/screen/`);
   assert.equal(page.status, 200);
   assert.match(page.headers.get("content-type"), /text\/html/);
-  assert.match(await page.text(), /手势|手感/);
+  assert.match(await page.text(), /投影/);
 
   const engine = await fetch(`http://127.0.0.1:${classroom.port}/overlay/engine.js`);
   assert.equal(engine.status, 200);

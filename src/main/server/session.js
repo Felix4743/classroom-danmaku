@@ -216,6 +216,24 @@ export function createSession(options = {}) {
       }
     }
 
+    /*
+     * 投影页只重放**置顶的那几条**，不重放滚动流。
+     *
+     * 置顶是"钉在屏幕上"的东西，投影刷新一下（老师手滑按了 F5、窗口被关掉
+     * 重开）就消失，和他刚才的操作直接矛盾。滚动中的那几条则相反：它们几秒内
+     * 就会自己滚出去，把最近 200 条一次性灌回去只会让屏幕被历史弹幕淹没 ——
+     * 那正好是本项目要解决的那个问题。
+     */
+    if (role === ROLE.OVERLAY || role === ROLE.SCREEN) {
+      const pinned = visibleItems()
+        .filter((item) => item.pinned)
+        .sort((a, b) => a.pinnedAt - b.pinnedAt);
+      for (const item of pinned) {
+        actions.push(send(clientId, S2C.NEW, publicDanmaku(item)));
+        actions.push(send(clientId, S2C.PIN, { ...publicDanmaku(item), pinned: true }));
+      }
+    }
+
     actions.push(send(ROOM.HOST, S2C.STATE, statePayload(), clientId));
     return actions;
   }
@@ -439,8 +457,11 @@ export function createSession(options = {}) {
           item.pinnedAt = 0;
         }
         return [
-          send(ROOM.PUBLIC, S2C.PIN, { id: item.id, pinned: item.pinned }),
-          send(ROOM.HOST, S2C.PIN, { id: item.id, pinned: item.pinned }),
+          // 置顶消息里带上完整内容：投影可能从来没收到过这条弹幕（它早就
+          // 滚过去了，或者投影是刚打开/刚重连的）。只发 id 的话，投影会
+          // 查无此条，于是老师点了置顶、投影上什么都没发生。
+          send(ROOM.PUBLIC, S2C.PIN, { ...publicDanmaku(item), pinned: item.pinned }),
+          send(ROOM.HOST, S2C.PIN, { ...publicDanmaku(item), pinned: item.pinned }),
         ];
       }
 

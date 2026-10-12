@@ -1,17 +1,56 @@
 /**
- * V0 手感调参页。
+ * 弹幕层（`/screen`）—— 投影上那层盖住 PPT 的东西。
  *
- * 目标只有一个：把「弹幕的手感」调出来（产品文档 8.1 / 技术方案 §10）。
- * 所以这个页面上没有服务端、没有学生、没有身份 —— 自己给自己发弹幕，
- * 五个滑块实时生效，右上角盯着帧率。
+ * 它和学生页、老师页最大的区别是：**它一句话都不发**。它只是把服务端广播
+ * 过来的弹幕画出来，所以它永远不进 host 房间，也永远拿不到任何学生身份
+ * （§4.4 的红线）。老师按「清屏」「暂停」「删除」「置顶」时，投影这边是被动
+ * 跟着变的 —— 这也是"老师手机上按一下，投影上立刻见效"那条验收标准的落点。
+ *
+ * 两个 URL 开关：
+ *   `?mode=overlay` —— 去掉底色，给 Electron 的透明窗口用（§4.1 的 L0）。
+ *   `?diag`        —— 显示右上角的帧率角标。投影上默认不显示任何字。
  */
 
-import { CONFIG_LIMITS, DEFAULT_CONFIG, sanitizeConfig } from "../../shared/config.js";
-import { CanvasDanmakuView, DanmakuEngine, FpsMeter, fontOf } from "../../overlay/engine.js";
+import { createClassroomClient, STATUS } from "../../shared/client.js";
+import { clampConfig, DEFAULT_CONFIG } from "../../shared/config.js";
+import { ROLE, S2C } from "../../shared/protocol.js";
+import {
+  CanvasDanmakuView,
+  DanmakuEngine,
+  FpsMeter,
+  fontOf,
+} from "../../overlay/engine.js";
 
-const canvas = document.getElementById("stage");
+/** 一台服务只上一节课（和学生页、老师页同一个约定）。 */
+const CLASS_ID = "default";
 
-// 宽度测量必须用真实的 2D context，且字体要和渲染时完全一致，否则轨道分配会算错
+const params = new URLSearchParams(location.search);
+const OVERLAY_MODE = params.get("mode") === "overlay";
+
+/*
+ * 所有 id 都写成字面量，不用 `el(id)` 这类小工具。
+ * `tests/unit/static-graph.test.mjs` 靠正则抓 getElementById 后面的字符串
+ * 字面量，再断言这些 id 在 HTML 里都找得到 —— 包一层函数它一个也抓不到。
+ */
+const dom = {
+  stage: document.getElementById("stage"),
+  hud: document.getElementById("hud"),
+  hudFps: document.getElementById("hud-fps"),
+  hudActive: document.getElementById("hud-active"),
+  hudPinned: document.getElementById("hud-pinned"),
+  hudLanes: document.getElementById("hud-lanes"),
+  hudDpr: document.getElementById("hud-dpr"),
+  hudDropped: document.getElementById("hud-dropped"),
+  status: document.getElementById("status"),
+  statusText: document.getElementById("status-text"),
+};
+
+if (OVERLAY_MODE) document.body.classList.add("mode-overlay");
+dom.hud.hidden = !params.has("diag");
+
+// ── 引擎 ────────────────────────────────────────────────────────────────────
+
+// 宽度测量必须用真实的 2D context，且字体要和渲染时完全一致，否则轨道会算错
 const ruler = document.createElement("canvas").getContext("2d");
 function measureText(text, fontSize) {
   ruler.font = fontOf(fontSize);
@@ -19,277 +58,166 @@ function measureText(text, fontSize) {
 }
 
 const engine = new DanmakuEngine({ measureText });
-const view = new CanvasDanmakuView(canvas, engine);
+const view = new CanvasDanmakuView(dom.stage, engine);
 const fps = new FpsMeter(180);
 
 function resize() {
   const size = view.resize();
-  document.getElementById("hud-dpr").textContent = size.dpr.toFixed(2);
-  document.getElementById("hud-lanes").textContent = String(engine.laneCount);
+  dom.hudDpr.textContent = size.dpr.toFixed(2);
+  dom.hudLanes.textContent = String(engine.laneCount);
 }
 window.addEventListener("resize", resize);
 resize();
 
-// ── 演示文本池 ───────────────────────────────────────────────────────────────
+// ── 状态 ────────────────────────────────────────────────────────────────────
 
-const SAMPLES = [
-  "这里没听懂",
-  "老师能再讲一遍吗",
-  "举个栗子",
-  "前面的公式能写慢一点吗",
-  "2333333",
-  "为什么这里要取极限",
-  "这个和上一章有什么关系",
-  "后排看不见板书",
-  "懂了懂了",
-  "考试会考这个吗",
-  "这个结论的适用条件是什么",
-  "求个例子",
-  "老师你话筒没声了",
-  "第三行那个等号是怎么来的",
-  "刚才那段能再放一次吗",
-  "原来如此",
-];
+let config = { ...DEFAULT_CONFIG };
+let serverState = { paused: false, mutedUntil: 0, clearedAt: 0 };
+let connection = STATUS.IDLE;
+let lastClearedAt = 0;
 
-function randomText() {
-  return SAMPLES[Math.floor(Math.random() * SAMPLES.length)];
+function applyConfig(patch) {
+  /*
+   * 先夹紧、再盖到当前配置上 —— 顺序很重要。
+   *
+   * 不能写成 `sanitizeConfig({...config, ...patch})`：sanitizeConfig 对每个
+   * 认不出来的字段都退回**默认值**，于是服务端发来一个坏的字号，投影上的字
+   * 会从 36 莫名其妙跳回 28。退回"当前值"才是对的。
+   *
+   * 「绝不让引擎拿到 NaN」这件事仍然成立：clampConfig 把所有非有限数都丢掉，
+   * 而 config 一开始就是 DEFAULT_CONFIG 的副本，所以它永远不会被污染。
+   * （引擎里只要有一处拿到 NaN，Canvas 就会安静地什么都不画 ——
+   *   表现为"一片空白但控制台干净"，最难查的一类故障。）
+   */
+  config = { ...config, ...clampConfig(patch ?? {}) };
+  engine.setConfig(config);
+}
+
+// ── 协议 ────────────────────────────────────────────────────────────────────
+
+const handlers = {
+  [S2C.JOINED](payload) {
+    applyConfig(payload.config);
+  },
+
+  [S2C.CONFIG](payload) {
+    applyConfig(payload);
+  },
+
+  [S2C.STATE](payload) {
+    serverState = { ...serverState, ...payload };
+    /*
+     * 老师按了「清屏」，投影上的东西必须立刻没了。
+     *
+     * 判据是 `clearedAt` 变没变，而不是"收到 state 就清" —— state 还会因为
+     * 暂停、静音、有人上下线而发过来，那些时候清屏会把正在飞的弹幕全抹掉，
+     * 表现为"教室里明明有人在发，投影上却总是空的"。
+     */
+    if (payload.clearedAt && payload.clearedAt !== lastClearedAt) {
+      lastClearedAt = payload.clearedAt;
+      engine.clear();
+    }
+    renderStatus();
+  },
+
+  [S2C.NEW](payload) {
+    engine.push(payload, performance.now());
+  },
+
+  [S2C.UPDATE](payload) {
+    // 只有聚合计数要在投影上体现（§4.6）。点赞数、已回应是老师手机上的事
+    if (payload.aggregate !== undefined) engine.setAggregate(payload.id, payload.aggregate);
+  },
+
+  [S2C.REMOVE](payload) {
+    engine.remove(payload.id);
+  },
+
+  [S2C.PIN](payload) {
+    // 置顶的消息里带着完整内容，所以"老师置顶一条早就滚过去的弹幕"也能钉上
+    if (payload.pinned) engine.pin(payload);
+    else engine.unpin(payload.id);
+  },
+};
+
+// ── 提示条 ──────────────────────────────────────────────────────────────────
+
+/**
+ * 投影上唯一会出现的字。
+ *
+ * 老师站在讲台上，除了投影什么都看不到。所以"断线了""被暂停了""静音了"
+ * 必须直接写在投影上 —— 否则学生发不出弹幕，老师只会觉得是学生不积极。
+ */
+function renderStatus() {
+  const now = Date.now();
+  let text = null;
+  let tone = "alert";
+
+  if (connection === STATUS.RECONNECTING || connection === STATUS.CLOSED) {
+    text = "投影和服务器断开了，正在重连…";
+  } else if (serverState.paused) {
+    text = "弹幕已暂停";
+    tone = "calm";
+  } else if (serverState.mutedUntil > now) {
+    text = "已静音，学生暂时发不了";
+    tone = "calm";
+  }
+
+  dom.status.hidden = text === null;
+  if (text !== null) {
+    dom.statusText.textContent = text;
+    dom.status.dataset.tone = tone;
+  }
 }
 
 // ── 主循环（§4.2.1） ─────────────────────────────────────────────────────────
 
-let paused = false;
-let demo = false;
-let demoTimer = 0;
-let lastFrameAt = 0;
+let lastHudAt = 0;
 
 function frame(now) {
   fps.tick(now);
-  if (!paused) {
-    engine.update(now);
-    if (demo && now - demoTimer > 350) {
-      demoTimer = now;
-      engine.push({ text: randomText() }, now);
-    }
-  }
+  engine.update(now);
   view.render();
-  if (now - lastFrameAt > 250) {
-    lastFrameAt = now;
-    updateHud();
+
+  if (!dom.hud.hidden && now - lastHudAt > 250) {
+    lastHudAt = now;
+    const stats = fps.stats();
+    const summary = engine.summary();
+    dom.hudFps.textContent = stats.fps.toFixed(0);
+    dom.hudActive.textContent = String(summary.active);
+    dom.hudPinned.textContent = String(summary.pinned);
+    dom.hudLanes.textContent = String(summary.laneCount);
+    dom.hudDropped.textContent = String(summary.dropped);
   }
+
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
 
-function updateHud() {
-  const f = fps.stats();
-  const s = engine.summary();
-  document.getElementById("hud-fps").textContent = f.fps.toFixed(0);
-  document.getElementById("hud-p95").textContent = f.p95Ms.toFixed(1);
-  document.getElementById("hud-active").textContent = String(s.active);
-  document.getElementById("hud-waiting").textContent = String(s.waiting);
-  document.getElementById("hud-dropped").textContent = String(s.dropped);
-}
+// ── 连接 ────────────────────────────────────────────────────────────────────
 
-// ── 五个手感滑块（§4.2.2） ───────────────────────────────────────────────────
-
-const slidersBox = document.getElementById("sliders");
-const sliderInputs = new Map();
-
-for (const [key, limit] of Object.entries(CONFIG_LIMITS)) {
-  const wrap = document.createElement("div");
-  wrap.className = "slider";
-  wrap.innerHTML = `
-    <div class="slider-head">
-      <span>${limit.label}</span>
-      <b><span data-value="${key}">${DEFAULT_CONFIG[key]}</span>${limit.unit}</b>
-    </div>
-  `;
-  const input = document.createElement("input");
-  input.type = "range";
-  input.min = String(limit.min);
-  input.max = String(limit.max);
-  input.step = String(limit.step);
-  input.value = String(DEFAULT_CONFIG[key]);
-  input.dataset.configKey = key;
-  input.addEventListener("input", () => {
-    applyConfig({ [key]: Number(input.value) });
-    if (benchRunning) finishBench("参数已改动，压测作废");
-  });
-  wrap.appendChild(input);
-  slidersBox.appendChild(wrap);
-  sliderInputs.set(key, input);
-}
-
-/** 把 engine.config 的当前值同步回滑块与轨道数显示。 */
-function syncSliders() {
-  for (const [key, input] of sliderInputs) {
-    input.value = String(engine.config[key]);
-    document.querySelector(`[data-value="${key}"]`).textContent = String(engine.config[key]);
-  }
-  document.getElementById("hud-lanes").textContent = String(engine.laneCount);
-}
-
-/**
- * 改参数的唯一入口。引擎、滑块、localStorage 三处不许各改各的 ——
- * 手感调参页最容易出的 bug 就是某一处漏同步，然后你对着一个假的读数调半天。
- */
-function applyConfig(patch) {
-  engine.setConfig(patch); // 内部按 CONFIG_LIMITS 夹紧，非法键直接丢弃
-  syncSliders();
-  saveConfig();
-}
-
-function applyDefaults() {
-  applyConfig({ ...DEFAULT_CONFIG });
-}
-
-// 拖完滑块刷新一下不该白拖。参数存在本地，刷新后原样恢复。
-const STORAGE_KEY = "classroom-danmaku.v0.config";
-
-function saveConfig() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(engine.config));
-  } catch {
-    /* 隐私模式或配额满会抛异常，不能让它影响调参 */
-  }
-}
-
-function loadSavedConfig() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null");
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-// 恢复必须在滑块建好之后。这里也**不能**碰压测的那批变量，它们还在 TDZ 里。
-// sanitizeConfig 兜住 localStorage 被手改坏 / 旧版本残留字段的情况。
-const restored = loadSavedConfig();
-if (restored) applyConfig(sanitizeConfig(restored));
-
-// ── 控件 ─────────────────────────────────────────────────────────────────────
-
-const textInput = document.getElementById("text");
-const form = document.getElementById("panel");
-
-form.addEventListener("submit", (event) => {
-  event.preventDefault();
-  send(textInput.value);
-  textInput.value = "";
+const client = createClassroomClient({
+  url: `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`,
+  // 浏览器里的降级形态是 screen，盖在 PPT 上的透明窗口是 overlay（§4.1）
+  join: { role: OVERLAY_MODE ? ROLE.OVERLAY : ROLE.SCREEN, classId: CLASS_ID },
+  // 参数是**整条消息** `{event, payload}`，不是 (event, payload)
+  onEvent: (message) => {
+    const handler = handlers[message?.event];
+    if (handler) handler(message.payload ?? {});
+  },
+  // §4.3.2：重连必须清空本地重建。置顶条也一起清 —— 服务端在 join 之后会
+  // 把当前钉着的重发一遍，留着旧的反而会出现"老师已经取消置顶，投影上还钉着"
+  onReset: () => {
+    engine.clear({ keepPinned: false });
+    lastClearedAt = 0;
+  },
+  onStatus: (next) => {
+    connection = next;
+    renderStatus();
+  },
 });
 
-document.querySelectorAll(".preset").forEach((button) => {
-  button.addEventListener("click", () => send(button.textContent, button.dataset.preset));
-});
+client.open();
 
-function send(text, presetId) {
-  const value = String(text ?? "").trim();
-  if (!value) return;
-  engine.push({ text: value, presetId: presetId ?? null }, performance.now());
-}
-
-document.getElementById("clear").addEventListener("click", () => engine.clear());
-
-const pauseButton = document.getElementById("pause");
-pauseButton.addEventListener("click", () => {
-  paused = !paused;
-  pauseButton.textContent = paused ? "继续" : "暂停";
-  pauseButton.classList.toggle("on", paused);
-  // 恢复时丢弃暂停期间的时间，否则弹幕会瞬移（§4.2.1 的 dt 夹紧只兜 50ms）
-  engine.resetClock();
-});
-
-const demoButton = document.getElementById("demo");
-demoButton.addEventListener("click", () => {
-  demo = !demo;
-  demoTimer = 0;
-  demoButton.classList.toggle("on", demo);
-});
-
-document.getElementById("reset").addEventListener("click", applyDefaults);
-
-// ── 导出参数 ─────────────────────────────────────────────────────────────────
-// 调完手感要把结果原样贴回给实现方，所以这里输出的就是引擎正在用的那一份。
-
-const exportedBox = document.getElementById("exported");
-
-document.getElementById("export").addEventListener("click", async () => {
-  const json = JSON.stringify(engine.config, null, 2);
-  exportedBox.hidden = false;
-  try {
-    // 走 127.0.0.1 时是安全上下文；但用局域网 IP 打开时 navigator.clipboard 不存在
-    await navigator.clipboard.writeText(json);
-    exportedBox.textContent = `${json}\n\n（已复制到剪贴板）`;
-  } catch {
-    exportedBox.textContent = `${json}\n\n（自动复制不可用，请手动选中上面这段）`;
-  }
-});
-
-const panel = document.getElementById("panel");
-const hideButton = document.getElementById("hide");
-function togglePanel() {
-  panel.hidden = !panel.hidden;
-}
-hideButton.addEventListener("click", togglePanel);
-window.addEventListener("keydown", (event) => {
-  if (event.target instanceof HTMLInputElement) return;
-  if (event.key === "h" || event.key === "H") togglePanel();
-});
-
-// ── 性能基线：100 条同屏（§8.5） ─────────────────────────────────────────────
-
-const benchButton = document.getElementById("bench");
-const banner = document.getElementById("banner");
-const verdict = document.getElementById("verdict");
-const BENCH_COUNT = 100;
-const BENCH_SECONDS = 10;
-const FPS_TARGET = 55;
-let benchRunning = false;
-let benchTimer = 0;
-
-benchButton.addEventListener("click", () => {
-  if (benchRunning) {
-    finishBench("已手动中止");
-    return;
-  }
-  demo = false;
-  demoButton.classList.remove("on");
-  engine.setBench(true);
-  engine.clear();
-  fps.reset();
-  banner.hidden = false;
-  benchButton.classList.add("on");
-  benchButton.textContent = "中止压测";
-  verdict.hidden = true;
-  benchRunning = true;
-
-  const now = performance.now();
-  for (let i = 0; i < BENCH_COUNT; i++) {
-    engine.push({ text: randomText() }, now);
-  }
-
-  benchTimer = setTimeout(() => {
-    const f = fps.stats();
-    const target = f.fps >= FPS_TARGET;
-    const detail =
-      `压测 ${BENCH_COUNT} 条同屏 · 采样 ${BENCH_SECONDS} 秒：` +
-      `平均 ${f.fps.toFixed(1)} fps，平均帧时间 ${f.avgMs.toFixed(1)} ms，` +
-      `p95 ${f.p95Ms.toFixed(1)} ms → ${target ? "达标" : "未达标"}`;
-    finishBench(null, detail, target);
-  }, BENCH_SECONDS * 1000);
-});
-
-function finishBench(note, detail, pass) {
-  if (!benchRunning) return;
-  benchRunning = false;
-  clearTimeout(benchTimer);
-  benchButton.classList.remove("on");
-  benchButton.textContent = "压测 100 条";
-  banner.hidden = true;
-  engine.setBench(false);
-  fps.reset();
-  verdict.hidden = false;
-  verdict.className = `verdict${pass === true ? " pass" : pass === false ? " fail" : ""}`;
-  verdict.textContent = note ?? detail;
-}
+// 静音是有时限的，到点了提示条要自己消失，没有别的时钟
+setInterval(renderStatus, 1000);

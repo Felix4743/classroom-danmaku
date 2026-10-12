@@ -18,6 +18,33 @@
 
 import { readFileSync } from "node:fs";
 
+/** 帧回调队列与虚构的时钟，由 `installDom` 重置、由 `runFrame` 推进。 */
+const frameQueue = [];
+const windowListeners = new Map();
+let frameTime = 0;
+
+/**
+ * 推进若干帧（默认一帧 16.7ms）。
+ *
+ * 页面的帧循环（画弹幕、刷帧率角标）只在 rAF 里跑，而 rAF 在测试里不排期，
+ * 所以要断言"屏幕上真的有东西"就得手动推帧。
+ *
+ * @returns {number} 推进后的虚构时间戳
+ */
+export function runFrame(dtMs = 1000 / 60, times = 1) {
+  for (let i = 0; i < times; i += 1) {
+    frameTime += dtMs;
+    const batch = frameQueue.splice(0, frameQueue.length);
+    for (const callback of batch) callback(frameTime);
+  }
+  return frameTime;
+}
+
+/** 派发一个 window 上的事件（比如 resize）。 */
+export function fireWindow(type, event = { type }) {
+  for (const listener of windowListeners.get(type) ?? []) listener(event);
+}
+
 class StubElement {
   constructor(tagName, id = "") {
     this.tagName = String(tagName).toUpperCase();
@@ -32,6 +59,42 @@ class StubElement {
     this.value = "";
     this.type = "";
     this.className = "";
+    this.classes = new Set();
+    this.classList = {
+      add: (...names) => names.forEach((name) => this.classes.add(name)),
+      remove: (...names) => names.forEach((name) => this.classes.delete(name)),
+      contains: (name) => this.classes.has(name),
+    };
+  }
+
+  /** 画布只需要一个能设 font、能 measureText 的 2D 上下文。 */
+  getContext() {
+    if (!this._ctx) {
+      const ctx = {
+        font: "",
+        textBaseline: "",
+        globalAlpha: 1,
+        fillStyle: "",
+        strokeStyle: "",
+        lineWidth: 1,
+        lineJoin: "",
+        measureText(text) {
+          // 和 engine.test.mjs 用同一套假宽度：只跟字符数和字号有关，
+          // 测试不依赖这台机器上装了什么字体
+          const size = Number.parseFloat(/(\d+(?:\.\d+)?)px/.exec(ctx.font)?.[1] ?? "0");
+          return { width: String(text).length * size * 0.6 };
+        },
+        setTransform() {},
+        clearRect() {},
+        fillRect() {},
+        fillText() {},
+        strokeText() {},
+        save() {},
+        restore() {},
+      };
+      this._ctx = ctx;
+    }
+    return this._ctx;
   }
 
   append(...nodes) {
@@ -138,14 +201,16 @@ export class FakeSocket {
  * 把一份 HTML 里所有 id 建成元素，装上全局对象，返回元素表。
  *
  * @param {string} html 页面 HTML 的全文
+ * @param {{search?: string}} [options] `location.search`，页面靠它读 `?diag` 这类开关
  */
-export function installDom(html) {
+export function installDom(html, { search = "" } = {}) {
   const elements = new Map();
   for (const [, id] of html.matchAll(/\bid="([^"]+)"/g)) {
     elements.set(id, new StubElement("div", id));
   }
 
   const document = {
+    body: new StubElement("body"),
     getElementById(id) {
       // 刻意不兜底造一个：查了不存在的 id 就该当场炸，
       // 而不是在浏览器里安静地拿到 null 然后什么都不做
@@ -165,9 +230,33 @@ export function installDom(html) {
   };
 
   define("document", document);
-  define("location", { protocol: "http:", host: "127.0.0.1:3000", href: "http://127.0.0.1:3000/" });
+  define("location", {
+    protocol: "http:",
+    host: "127.0.0.1:3000",
+    href: "http://127.0.0.1:3000/",
+    search,
+  });
   define("navigator", { vibrate: () => true, userAgent: "stub" });
   define("window", globalThis);
+  define("devicePixelRatio", 1);
+
+  // 页面往 window 上挂 resize 之类的监听器；Node 的 globalThis 不是 EventTarget
+  windowListeners.clear();
+  define("addEventListener", (type, listener) => {
+    if (!windowListeners.has(type)) windowListeners.set(type, []);
+    windowListeners.get(type).push(listener);
+  });
+  define("removeEventListener", () => {});
+
+  // rAF 只把回调存起来，**绝不立刻调用** —— 页面的帧循环会自己重新排期，
+  // 同步调用就是无限递归。测试想推进帧的时候调 runFrame()。
+  frameQueue.length = 0;
+  frameTime = 0;
+  define("requestAnimationFrame", (callback) => {
+    frameQueue.push(callback);
+    return frameQueue.length;
+  });
+  define("cancelAnimationFrame", () => {});
 
   const storage = new Map();
   define("localStorage", {
@@ -216,8 +305,8 @@ export async function loadPageScript(url) {
 }
 
 /** 读页面 HTML 并装上 DOM，返回 { elements, html }。 */
-export function readPage(htmlPath) {
+export function readPage(htmlPath, options) {
   const html = readFileSync(htmlPath, "utf8");
-  const elements = installDom(html);
+  const elements = installDom(html, options);
   return { elements, html };
 }

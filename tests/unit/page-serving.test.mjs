@@ -131,10 +131,16 @@ test("页面 URL 与磁盘路径的对应关系没有被改错", () => {
   // 这条把 routes.js 的约定钉死：改了挂载点就得改这里，是刻意的
   assert.deepEqual(
     Object.keys(mounts).sort(),
-    ["/host", "/m", "/overlay", "/screen", "/shared"],
+    ["/host", "/m", "/overlay", "/screen", "/shared", "/tune"],
   );
+  // 投影页（技术方案 §4.1 的 L2）。它盖在 PPT 上，是学生弹幕唯一的去处
   assert.equal(
     readFileSync(join(SRC, mounts["/screen"], "index.html"), "utf8").includes("screen.js"),
+    true,
+  );
+  // 手感调参页是开发工具，不是给老师或学生用的页面（V0 的交付物）
+  assert.equal(
+    readFileSync(join(SRC, mounts["/tune"], "index.html"), "utf8").includes("tune.js"),
     true,
   );
   // 学生扫码进的就是这个地址，它必须真的存在（产品文档 §7.1）

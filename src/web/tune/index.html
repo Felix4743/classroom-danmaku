@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>课堂弹幕 · 手感调参页（开发工具）</title>
+    <link rel="stylesheet" href="./tune.css" />
+  </head>
+  <body>
+    <canvas id="stage"></canvas>
+
+    <div id="hud" class="hud">
+      <div><b id="hud-fps">--</b> fps</div>
+      <div class="hud-sub">帧时间 p95 <span id="hud-p95">--</span> ms</div>
+      <div class="hud-sub">同屏 <span id="hud-active">0</span> / 排队 <span id="hud-waiting">0</span></div>
+      <div class="hud-sub">轨道 <span id="hud-lanes">0</span> 条 · DPR <span id="hud-dpr">1</span></div>
+      <div class="hud-sub">丢弃 <span id="hud-dropped">0</span> 条</div>
+    </div>
+
+    <div id="banner" class="banner" hidden>
+      性能基线模式：轨道分配与同屏上限已旁路，弹幕会互相重叠（只测绘制帧率）
+    </div>
+
+    <form id="panel" class="panel" autocomplete="off">
+      <div class="panel-head">
+        <span>手感调参台</span>
+        <button type="button" id="hide" class="ghost" title="按 H 隐藏 / 显示">隐藏 (H)</button>
+      </div>
+
+      <div id="sliders"></div>
+
+      <div class="row">
+        <input id="text" maxlength="100" placeholder="自己给自己发一条弹幕，回车发送" />
+        <button type="submit">发送</button>
+      </div>
+
+      <div class="row buttons">
+        <button type="button" id="clear">清屏</button>
+        <button type="button" id="pause">暂停</button>
+        <button type="button" id="demo">自动演示</button>
+        <button type="button" id="bench">压测 100 条</button>
+      </div>
+
+      <div class="row buttons">
+        <button type="button" class="preset" data-preset="not_understood">没听懂</button>
+        <button type="button" class="preset" data-preset="again">再讲一遍</button>
+        <button type="button" class="preset" data-preset="example">举个栗子</button>
+        <button type="button" id="reset">恢复默认参数</button>
+      </div>
+
+      <div class="row buttons">
+        <button type="button" id="export">复制当前参数</button>
+      </div>
+
+      <pre id="exported" class="exported" hidden></pre>
+
+      <p id="verdict" class="verdict" hidden></p>
+      <p class="hint">
+        参数会自动存在本机，刷新不丢。按 <b>H</b> 或「隐藏」把面板收起来看真实观感。
+      </p>
+      <p class="hint">
+        这是开发用的参数调试台，不是给学生或老师用的页面。投影页是 <b>/screen/</b>。
+      </p>
+      <p class="hint">
+        V0 验收：100 条同屏 ≥ 55 fps。真实场景还要在透明窗口下再跑一次（技术方案 §4.1）。
+      </p>
+    </form>
+
+    <script type="module" src="./tune.js"></script>
+  </body>
+</html>

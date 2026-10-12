@@ -1,4 +1,15 @@
-/* V0 手感调参页。舞台用深灰而不是纯黑，接近投影上的观感。 */
+/*
+ * 弹幕层的样式。
+ *
+ * 这个页面上只有一张画布和一个几乎看不见的状态条 —— 弹幕的观感全部由
+ * Canvas 那边决定（字号、速度、不透明度都是 §4.2.2 的五个滑块在管）。
+ * CSS 在这里唯一要负责的事，是让画布**铺满**并且不出现滚动条：投影上
+ * 多出一个滚动条，比弹幕重叠还显眼。
+ */
+
+:root {
+  color-scheme: dark;
+}
 
 * {
   box-sizing: border-box;
@@ -7,193 +18,74 @@
 html,
 body {
   margin: 0;
+  padding: 0;
+  width: 100%;
   height: 100%;
+  /* 投影上不该出现任何滚动条 */
   overflow: hidden;
-  background: #16181d;
-  color: #e9ecef;
+  background: #0b0d12;
   font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
 }
 
+/*
+ * `?mode=overlay`：交给 Electron 的透明窗口用（§4.1 的 L0）。
+ * 底色必须真的是透明的 —— 窗口是透明的，页面自己再糊一层黑，PPT 就被挡住了。
+ */
+body.mode-overlay {
+  background: transparent;
+}
+
 #stage {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
   display: block;
+  width: 100vw;
+  height: 100vh;
 }
 
 .hud {
   position: fixed;
-  top: 12px;
-  right: 12px;
-  padding: 10px 14px;
+  top: 8px;
+  right: 10px;
+  padding: 8px 12px;
   border-radius: 10px;
-  background: rgba(20, 22, 28, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(12, 14, 18, 0.72);
+  color: #cfd6e4;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.7;
   text-align: right;
   pointer-events: none;
-  font-variant-numeric: tabular-nums;
+  /* 它只在 ?diag 下出现，但万一出现在投影上，也只该是背景的一部分 */
+  opacity: 0.85;
 }
 
 .hud b {
-  font-size: 20px;
-  color: #8ce99a;
+  color: #ffffff;
 }
 
-.hud-sub {
-  color: #adb5bd;
-}
-
-.banner {
+/*
+ * 状态条。它替代了"投影上什么都不说，老师以为弹幕功能坏了"这种局面：
+ * 断线、被暂停、被静音都要在投影上直接写出来 —— 老师站在讲台上看不到
+ * 手机之外的任何东西时，投影就是唯一能告诉他出事了的地方。
+ */
+.status {
   position: fixed;
-  top: 12px;
   left: 50%;
+  bottom: 24px;
   transform: translateX(-50%);
-  padding: 8px 16px;
+  padding: 10px 22px;
   border-radius: 999px;
-  background: #7048e8;
-  font-size: 13px;
-  z-index: 5;
+  background: rgba(180, 60, 40, 0.9);
+  color: #ffffff;
+  font-size: 18px;
+  letter-spacing: 0.05em;
+  pointer-events: none;
 }
 
-.panel {
-  position: fixed;
-  left: 12px;
-  bottom: 12px;
-  width: 340px;
-  padding: 14px 16px 12px;
-  border-radius: 12px;
-  background: rgba(20, 22, 28, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(6px);
-  font-size: 13px;
+.status[data-tone="calm"] {
+  background: rgba(30, 36, 48, 0.85);
+  color: #dfe6f2;
 }
 
-.panel[hidden] {
+body.mode-overlay .status {
+  /* 透明窗口里"我连不上了"这件事由老师手机负责，投影上不再多一层 */
   display: none;
-}
-
-.panel-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-  font-weight: 600;
-}
-
-.slider {
-  margin-bottom: 8px;
-}
-
-.slider-head {
-  display: flex;
-  justify-content: space-between;
-  color: #adb5bd;
-  margin-bottom: 2px;
-}
-
-.slider-head b {
-  color: #e9ecef;
-  font-variant-numeric: tabular-nums;
-}
-
-input[type="range"] {
-  width: 100%;
-  accent-color: #4dabf7;
-}
-
-.row {
-  display: flex;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.row.buttons {
-  flex-wrap: wrap;
-}
-
-input[type="text"] {
-  flex: 1;
-  min-width: 0;
-  padding: 7px 9px;
-  border-radius: 7px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(0, 0, 0, 0.35);
-  color: inherit;
-  font: inherit;
-}
-
-button {
-  padding: 7px 11px;
-  border-radius: 7px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.08);
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-button:hover {
-  background: rgba(255, 255, 255, 0.16);
-}
-
-button.on {
-  background: #4dabf7;
-  border-color: #4dabf7;
-  color: #08243d;
-}
-
-button.ghost {
-  background: transparent;
-  font-size: 12px;
-  padding: 3px 7px;
-}
-
-.verdict {
-  margin: 10px 0 0;
-  padding: 8px 10px;
-  border-radius: 7px;
-  background: rgba(77, 171, 247, 0.14);
-  border: 1px solid rgba(77, 171, 247, 0.5);
-  line-height: 1.5;
-}
-
-.verdict.pass {
-  background: rgba(140, 233, 154, 0.14);
-  border-color: rgba(140, 233, 154, 0.55);
-}
-
-.verdict.fail {
-  background: rgba(255, 168, 168, 0.14);
-  border-color: rgba(255, 168, 168, 0.6);
-}
-
-.exported {
-  margin: 10px 0 0;
-  padding: 8px 10px;
-  border-radius: 7px;
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  font: 12px/1.6 ui-monospace, Consolas, "Courier New", monospace;
-  white-space: pre-wrap;
-  user-select: all;
-  max-height: 180px;
-  overflow: auto;
-}
-
-.exported[hidden] {
-  display: none;
-}
-
-.hint {
-  margin: 8px 0 0;
-  color: #6c757d;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.hint b {
-  color: #adb5bd;
 }

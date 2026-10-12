@@ -16,6 +16,8 @@ import {
   FpsMeter,
   fontOf,
   laneFits,
+  MAX_PINNED,
+  PINNED_BAR_PADDING,
   speedOf,
 } from "../../src/overlay/engine.js";
 
@@ -409,3 +411,151 @@ test("默认配置没有被测试或 UI 意外改动", () => {
     laneGap: 1.6,
   });
 });
+
+// ── 置顶条与删除（§4.8 的老师撤回、§4.2.2 的置顶条） ─────────────────────────
+
+/** 造一条置顶用的弹幕载荷。 */
+function pinnedPayload(id, overrides = {}) {
+  return {
+    id,
+    text: `钉住的${id}`,
+    nickname: "小明",
+    color: "#7fd1ff",
+    presetId: "not_understood",
+    ts: 1,
+    ...overrides,
+  };
+}
+
+test("置顶条会把滚动区挤下去，取消置顶后轨道数还回来", () => {
+  const engine = makeEngine();
+  const lanesBefore = engine.laneCount;
+  assert.equal(engine.pinnedBarHeight(), 0, "没钉东西时置顶条不占高度");
+  assert.equal(engine.summary().pinned, 0);
+
+  assert.equal(engine.pin(pinnedPayload("p1", { aggregate: 3 })), true);
+  assert.equal(engine.pinned.length, 1);
+  assert.equal(engine.summary().pinned, 1);
+  assert.ok(engine.pinnedBarHeight() > 0);
+  assert.ok(
+    engine.laneCount < lanesBefore,
+    "置顶条占掉的高度必须从滚动区里扣，否则第一条弹幕会压在置顶条上",
+  );
+  // 置顶条的高度是按轨道行高算的，所以它和滚动区之间不会差几像素
+  assert.equal(engine.pinnedBarHeight() % engine.laneHeight, PINNED_BAR_PADDING * 2);
+
+  assert.equal(engine.unpin("p1"), true);
+  assert.equal(engine.pinned.length, 0);
+  assert.equal(engine.pinnedBarHeight(), 0);
+  assert.equal(engine.laneCount, lanesBefore, "取消置顶后轨道数必须还原");
+  assert.equal(engine.unpin("p1"), false, "取消一条没钉的不该返回 true");
+});
+
+test("钉得越多置顶条越高，超过上限挤掉最老的一条", () => {
+  const engine = makeEngine();
+  engine.pin(pinnedPayload("p1"));
+  const one = engine.pinnedBarHeight();
+  engine.pin(pinnedPayload("p2"));
+  assert.ok(engine.pinnedBarHeight() > one, "两条必须比一条高");
+  engine.pin(pinnedPayload("p3"));
+  assert.equal(engine.pinned.length, 3);
+
+  engine.pin(pinnedPayload("p4"));
+  assert.equal(engine.pinned.length, MAX_PINNED, "置顶上限和老师端的 MAX_PINNED 是同一个数");
+  assert.deepEqual(
+    engine.pinned.map((item) => item.id),
+    ["p2", "p3", "p4"],
+    "挤掉的应该是最老的那条",
+  );
+});
+
+test("同一个 id 置顶两次不会变成两条", () => {
+  const engine = makeEngine();
+  assert.equal(engine.pin(pinnedPayload("p1")), true);
+  assert.equal(engine.pin(pinnedPayload("p1")), true, "重复置顶要当作成功，不能重复插");
+  assert.equal(engine.pinned.length, 1);
+});
+
+test("没有文字的置顶请求被拒绝", () => {
+  const engine = makeEngine();
+  assert.equal(engine.pin({ id: "p1" }), false);
+  assert.equal(engine.pin({ id: "p1", text: "" }), false);
+  assert.equal(engine.pin({ id: "p1", text: null }), false);
+  assert.equal(engine.pin({ text: "没有 id" }), false);
+  assert.equal(engine.pin(), false);
+  assert.equal(engine.pinned.length, 0);
+});
+
+test("正在飞的弹幕被置顶后就从滚动流里摘出去了", () => {
+  const engine = makeEngine();
+  engine.push({ id: "d1", text: "一条普通弹幕", color: "#fff", ts: 1 }, 0);
+  assert.equal(engine.active.length, 1);
+
+  engine.pin(pinnedPayload("d1", { text: "一条普通弹幕" }));
+  assert.equal(engine.active.length, 0, "同一条不能既在飞又钉在上面，看起来像故障");
+  assert.equal(engine.pinned.length, 1);
+});
+
+test("删除会连置顶条上的那条一起删掉", () => {
+  const engine = makeEngine();
+  engine.pin(pinnedPayload("p1"));
+  const lanesWithPin = engine.laneCount;
+
+  assert.equal(engine.remove("p1"), true);
+  assert.equal(engine.pinned.length, 0);
+  assert.equal(engine.laneCount, lanesWithPin + 1, "置顶条空了，轨道数要还原");
+  assert.equal(engine.remove("p1"), false, "删一条已经没了的返回 false");
+  assert.equal(engine.remove(""), false);
+});
+
+test("删掉轨道上最靠右的一条后，下一条不会压上还在飞的那条", () => {
+  // 单轨道引擎：高度只够放一行，两条弹幕必然同轨
+  const engine = makeEngine({ height: 60 });
+  assert.equal(engine.laneCount, 1);
+
+  engine.push({ id: "a", text: "AAAA", color: "#fff", ts: 1 }, 0);
+  for (let i = 0; i < 60; i++) engine.update((i + 1) * 50); // 前进 3 秒
+  engine.push({ id: "b", text: "BBBB", color: "#fff", ts: 2 }, 3000);
+
+  assert.equal(engine.active.length, 2);
+  const lane = engine.lanes[0];
+  assert.equal(lane.id, "b", "轨道记录的是最后进来的那条");
+  assert.equal(lane.lane, 0);
+
+  // 老师删掉了后进来的 b。如果不重算轨道记录，下一条会以为轨道空着
+  assert.equal(engine.remove("b"), true);
+  assert.equal(engine.active.length, 1);
+  assert.equal(
+    engine.lanes[0].id,
+    "a",
+    "轨道记录必须回退到还在飞的那条，否则下一条会从右边进来压在它身上",
+  );
+});
+
+test("清屏默认保留置顶，断线重连用的那种才连置顶一起清", () => {
+  const engine = makeEngine();
+  engine.pin(pinnedPayload("p1"));
+  engine.push({ id: "d1", text: "一条普通弹幕", color: "#fff", ts: 1 }, 0);
+  assert.equal(engine.active.length, 1);
+  assert.equal(engine.pinned.length, 1);
+
+  // 老师按「清屏」：他钉住的那条必须还在 —— 钉住就是因为不能让它滑走
+  engine.clear();
+  assert.equal(engine.active.length, 0);
+  assert.equal(engine.pinned.length, 1, "清屏顺手抹掉置顶等于废掉老师刚才的操作");
+
+  // 重连时的全量重建（§4.3.2）：本地记的置顶未必还作数，全丢掉等服务端重发
+  engine.clear({ keepPinned: false });
+  assert.equal(engine.pinned.length, 0);
+  assert.equal(engine.pinnedBarHeight(), 0);
+});
+
+test("计数只有到 2 才写在弹幕后面", () => {
+  const engine = makeEngine();
+  engine.push({ id: "a", text: "没听懂", presetId: "not_understood", color: "#fff", ts: 1 }, 0);
+  assert.equal(engine.labelOf(engine.active[0]), "没听懂", "一个人点写成 ×1 是噪音");
+
+  engine.setAggregate("a", 3);
+  assert.equal(engine.labelOf(engine.active[0]), "没听懂 ×3");
+});
+

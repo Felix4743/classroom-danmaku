@@ -10,7 +10,9 @@ import {
   presetLabel,
 } from "../../src/shared/presets.js";
 
-const SCREEN_HTML = new URL("../../src/web/screen/index.html", import.meta.url);
+// 预置按钮在**手感调参页**上（它是开发工具，用来自己造数据调参数）。
+// 学生页要发的是同一批 presetId，所以这一致性值得钉住。
+const SCREEN_HTML = new URL("../../src/web/tune/index.html", import.meta.url);
 
 test("预置弹幕的定义", async (t) => {
   await t.test("三个预置项，顺序固定", () => {

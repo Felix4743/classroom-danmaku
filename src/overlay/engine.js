@@ -23,9 +23,64 @@ const FONT_STACK = '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-s
  */
 const AGGREGATE_RESERVE = " ×88";
 
+/**
+ * 置顶条最多钉几条。和 `session.js` 的 MAX_PINNED 是同一个数字：
+ * 服务端不允许多钉，投影这一侧也不该显出第四条。
+ *
+ * 钉太多等于没钉 —— 屏幕顶上就又成了一条滚动流，而老师置顶恰恰是因为
+ * "这条不能滑走"。
+ */
+export const MAX_PINNED = 3;
+
+/** 置顶条上下各留的空白（CSS px）。 */
+export const PINNED_BAR_PADDING = 8;
+
+/** 置顶条底色。它必须把 PPT 压暗，否则白底幻灯片上的白字看不见。 */
+export const PINNED_BAR_BG = "rgba(12, 14, 18, 0.78)";
+
+/** 置顶条里文字的左边缘：色块宽度 + 中间的空隙。 */
+export const PINNED_TEXT_LEFT = PINNED_BAR_PADDING * 2 + 6;
+
+/**
+ * 把文字截到 maxWidth 以内，末尾加省略号。
+ *
+ * 置顶条只有一行高，超出屏幕的部分会被直接裁掉 —— 老师看到的是"这条问题
+ * 说到一半没了"，而不是"太长放不下"。二分而不是逐字减：每次只要 7 次测量，
+ * 且测量结果都在宽度缓存里。
+ */
+function fitText(engine, text, fontSize, maxWidth) {
+  if (maxWidth <= 0) return "";
+  if (engine.measure(text, fontSize) <= maxWidth) return text;
+
+  const ellipsis = "…";
+  const ellipsisWidth = engine.measure(ellipsis, fontSize);
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (engine.measure(text.slice(0, mid), fontSize) + ellipsisWidth <= maxWidth) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return low > 0 ? `${text.slice(0, low)}${ellipsis}` : ellipsis;
+}
+
 /** 字号 → CSS font 字符串。每帧不重新拼，缓存在弹幕对象上。 */
 export function fontOf(fontSize) {
   return `${fontSize}px ${FONT_STACK}`;
+}
+
+/**
+ * 行高 = 字号 × 轨道间距（§4.2.2）。
+ *
+ * 抽成函数是因为置顶条的高度也要用它，而置顶条高度又反过来决定轨道布局 ——
+ * 如果两处各写一遍公式，改了其中一处就会得到"置顶条和第一条轨道差几个像素"
+ * 这种谁都说不清的错位。
+ */
+export function laneHeightOf(config) {
+  return Math.max(1, config.fontSize * config.laneGap);
 }
 
 /**
@@ -48,7 +103,7 @@ export function computeLanes({ height, fontSize, laneGap, topInset = 0 }) {
     0,
     height - topInset - ENGINE.SAFE_MARGIN_PX * 2,
   );
-  const laneHeight = Math.max(1, fontSize * laneGap);
+  const laneHeight = laneHeightOf({ fontSize, laneGap });
   const laneCount = Math.max(1, Math.floor(usable / laneHeight));
   return { usable, laneHeight, laneCount, topInset };
 }
@@ -107,6 +162,11 @@ export class DanmakuEngine {
     this.lanes = [];
     /** 等待队列：暂时没有轨道可用的弹幕，下一帧重试 */
     this.waiting = [];
+    /**
+     * 置顶条（§4.2.1 的 drawPinned）。这些弹幕**不在滚动流里**，
+     * 它们钉在屏幕顶部直到老师取消置顶、删除或清屏。
+     */
+    this.pinned = [];
 
     this.pool = [];
     this.widthCache = new Map();
@@ -121,7 +181,7 @@ export class DanmakuEngine {
       height,
       fontSize: this.config.fontSize,
       laneGap: this.config.laneGap,
-      topInset,
+      topInset: this._inset(),
     });
     this.lanes = new Array(this._layout.laneCount).fill(null);
   }
@@ -217,6 +277,135 @@ export class DanmakuEngine {
     return false;
   }
 
+  /**
+   * 让一条弹幕立刻从屏幕上消失（协议 `host:remove`）。
+   *
+   * 这是老师"把课件抢回来"的手段之一：屏幕上出现了一条不该出现的东西，
+   * 它必须**现在**就没了 —— 等它自己滚出去（默认 12 秒）不叫删除。
+   *
+   * 置顶条里的也一起删：老师点了删除，投影上却还钉着那条，是最糟的表现。
+   *
+   * @returns {boolean} 删掉了返回 true；它本来就滚出屏幕了则返回 false。
+   */
+  remove(id) {
+    if (!id) return false;
+
+    const pinIndex = this.pinned.findIndex((item) => item.id === id);
+    if (pinIndex >= 0) {
+      const [item] = this.pinned.splice(pinIndex, 1);
+      this._recycle(item);
+      this._relayout();
+      return true;
+    }
+
+    for (const list of [this.active, this.waiting]) {
+      const index = list.findIndex((item) => item.id === id);
+      if (index < 0) continue;
+      const [item] = list.splice(index, 1);
+      const lane = item.lane;
+      /*
+       * 删掉的正好是这条轨道上最靠右的一条时，轨道记录会变空 ——
+       * 但这条轨道里很可能还有更靠左的弹幕在飞。不重算的话，下一条弹幕
+       * 会以为轨道是空的，直接从右边进来压在前一条身上。
+       */
+      const wasNewest = lane >= 0 && this.lanes[lane] === item;
+      this._recycle(item);
+      if (wasNewest) this._recomputeLane(lane);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 把一条弹幕钉到屏幕顶部（协议 `host:pin`）。
+   *
+   * 它不再滚动 —— 这正是置顶的意义。如果它还在滚动流里，就把它摘出来：
+   * 同一条弹幕既在飞又钉在上面，看起来像出了故障。
+   *
+   * @returns {boolean} 钉上去了（或本来就在上面）返回 true。
+   */
+  pin(payload = {}) {
+    const id = payload.id;
+    if (!id) return false;
+    if (this.pinned.some((item) => item.id === id)) return true;
+
+    const text = String(payload.text ?? "").slice(0, 100);
+    if (text.length === 0) return false;
+
+    this.remove(id);
+
+    const fontSize = this.config.fontSize;
+    const item = this.pool.pop() ?? {};
+    item.id = id;
+    item.seq = ++this.seq;
+    item.text = text;
+    item.nickname = payload.nickname ?? "";
+    item.color = payload.color ?? DANMAKU_COLORS[0];
+    item.presetId = payload.presetId ?? null;
+    item.ts = payload.ts ?? 0;
+    item.fontSize = fontSize;
+    item.font = fontOf(fontSize);
+    item.aggregate = payload.aggregate ?? null;
+    item.pinned = true;
+    item.lane = -1;
+    item.x = 0;
+    item.speed = 0;
+    // 置顶条不滚动，但要按文字宽度决定要不要截断（见 render）
+    item.width = this.measure(this.labelOf(item), fontSize);
+
+    this.pinned.push(item);
+    while (this.pinned.length > MAX_PINNED) {
+      const oldest = this.pinned.shift();
+      oldest.pinned = false;
+      this._recycle(oldest);
+    }
+    this._relayout();
+    return true;
+  }
+
+  /** 取消置顶（协议 `host:pin {pinned:false}`）。它不会回到滚动流里。 */
+  unpin(id) {
+    const index = this.pinned.findIndex((item) => item.id === id);
+    if (index < 0) return false;
+    const [item] = this.pinned.splice(index, 1);
+    item.pinned = false;
+    this._recycle(item);
+    this._relayout();
+    return true;
+  }
+
+  /** 屏幕上要显示的完整文字：带上聚合计数（§4.6）。 */
+  labelOf(item) {
+    // 计数只有到 2 才有信息量：一个人点「没听懂」写成 ×1 是噪音
+    return item.aggregate > 1 ? `${item.text} ×${item.aggregate}` : item.text;
+  }
+
+  /** 置顶条占的高度。没钉东西时是 0，轨道从屏幕最上面开始排。 */
+  pinnedBarHeight() {
+    if (this.pinned.length === 0) return 0;
+    return this.pinned.length * laneHeightOf(this.config) + PINNED_BAR_PADDING * 2;
+  }
+
+  /**
+   * 轨道布局要避开的顶部高度 = 外部 inset（热点条）+ 置顶条。
+   *
+   * 置顶条高矮随"钉了几条"变化，所以它不能像 topInset 那样一次性传进来，
+   * 每次重排都得重新算。
+   */
+  _inset() {
+    return this.topInset + this.pinnedBarHeight();
+  }
+
+  /** 找出这条轨道上最靠右的一条弹幕。删除中间那条之后用它修正轨道记录。 */
+  _recomputeLane(lane) {
+    let newest = null;
+    for (const item of this.active) {
+      if (item.lane !== lane) continue;
+      if (newest === null || item.x > newest.x) newest = item;
+    }
+    this.lanes[lane] = newest;
+  }
+
   /** 推进一帧。dt 由调用方给出（浏览器用 rAF 时间戳），内部夹住上限。 */
   update(nowMs) {
     const last = this._lastNowMs;
@@ -249,12 +438,27 @@ export class DanmakuEngine {
     this._lastNowMs = null;
   }
 
-  /** 清屏：只清视图，不删数据（协议 host:clear 的语义）。 */  clear() {
+  /**
+   * 清屏：只清视图，不删数据（协议 host:clear 的语义）。
+   *
+   * **置顶条默认不清**：老师钉住一条，是因为这条不能被滑走。按一次清屏就把它
+   * 一起抹掉，等于清屏顺手废掉了他刚才的操作，而他不会觉得这是自己的错。
+   *
+   * `keepPinned: false` 是给断线重连用的（§4.3.2 的全量重建）：连接断过之后，
+   * 本地记着的置顶未必还作数（老师可能正是在断线那几秒里取消的），
+   * 全部丢掉、等服务端重发才是对的。
+   */
+  clear({ keepPinned = true } = {}) {
     for (const item of this.active) this._recycle(item);
     for (const item of this.waiting) this._recycle(item);
     this.active.length = 0;
     this.waiting.length = 0;
     this.lanes.fill(null);
+    if (!keepPinned) {
+      for (const item of this.pinned) this._recycle(item);
+      this.pinned.length = 0;
+      this._relayout();
+    }
     this.stats.cleared += 1;
   }
 
@@ -297,6 +501,7 @@ export class DanmakuEngine {
     return {
       active: this.active.length,
       waiting: this.waiting.length,
+      pinned: this.pinned.length,
       laneCount: this._layout.laneCount,
       laneHeight: this._layout.laneHeight,
       admitted: this.stats.admitted,
@@ -326,7 +531,7 @@ export class DanmakuEngine {
       height: this.height,
       fontSize: this.config.fontSize,
       laneGap: this.config.laneGap,
-      topInset: this.topInset,
+      topInset: this._inset(),
     });
     const changed =
       next.laneCount !== this._layout.laneCount ||
@@ -439,7 +644,6 @@ export class CanvasDanmakuView {
     const engine = this.engine;
     ctx.clearRect(0, 0, engine.width, engine.height);
     ctx.textBaseline = "top";
-    ctx.globalAlpha = engine.config.alpha;
 
     const fontSize = engine.config.fontSize;
     const font = fontOf(fontSize);
@@ -447,6 +651,11 @@ export class CanvasDanmakuView {
       ctx.font = font;
       this._font = font;
     }
+
+    // §4.2.1 的绘制顺序：drawPinned 在最前面
+    this._drawPinned(ctx);
+
+    ctx.globalAlpha = engine.config.alpha;
     if (this.outline) {
       // 投影上的弹幕是盖在 PPT 上的，PPT 底色不可预测 —— 纯色文字在浅色
       // 幻灯片上会直接消失。描边让它在任何底色上都读得出来（§4.2.5 的
@@ -459,13 +668,51 @@ export class CanvasDanmakuView {
     const list = engine.active;
     for (let i = 0; i < list.length; i++) {
       const item = list[i];
-      // 计数只有到 2 才有信息量：一个人点「没听懂」写成 ×1 是噪音
-      const label = item.aggregate > 1 ? `${item.text} ×${item.aggregate}` : item.text;
+      const label = engine.labelOf(item);
       if (this.outline) ctx.strokeText(label, item.x, item.y);
       ctx.fillStyle = item.color;
       ctx.fillText(label, item.x, item.y);
     }
     ctx.globalAlpha = 1;
+  }
+
+  /**
+   * 置顶条：顶部一条压暗的带子，每行左边一个色块 + 一条不动的弹幕。
+   *
+   * 它**不跟着 globalAlpha 走**：置顶是老师明确选出来的重点，如果投影上
+   * 同屏几十条弹幕时它跟着淡下去，那就白钉了。
+   */
+  _drawPinned(ctx) {
+    const engine = this.engine;
+    const list = engine.pinned;
+    if (list.length === 0) return null;
+
+    const laneHeight = laneHeightOf(engine.config);
+    const fontSize = engine.config.fontSize;
+    const barHeight = engine.pinnedBarHeight();
+
+    const alpha = ctx.globalAlpha;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = PINNED_BAR_BG;
+    ctx.fillRect(0, 0, engine.width, barHeight);
+
+    const maxWidth = Math.max(0, engine.width - PINNED_TEXT_LEFT - PINNED_BAR_PADDING);
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      const y = PINNED_BAR_PADDING + i * laneHeight + (laneHeight - fontSize) / 2;
+      const markerWidth = Math.max(3, Math.round(fontSize / 8));
+      ctx.fillStyle = item.color;
+      ctx.fillRect(PINNED_BAR_PADDING, y, markerWidth, fontSize);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(
+        fitText(engine, engine.labelOf(item), fontSize, maxWidth),
+        PINNED_TEXT_LEFT,
+        y,
+      );
+    }
+    ctx.globalAlpha = alpha;
+    return barHeight;
   }
 }
 
