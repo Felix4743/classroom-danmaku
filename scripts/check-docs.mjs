@@ -8,6 +8,11 @@
  *   2. 代码块围栏（```）成对闭合
  *   3. 相对路径链接指向的文件真实存在
  *   4. 文档包含且仅包含一个一级标题
+ *   5. `§N` / `§N.M` 形式的章节引用在本文档中确有对应标题
+ *
+ * 第 5 项的用意：本项目的两份文档互相引用章节非常密集，改章节编号时
+ * 极易留下指向空气的引用。跨文档引用请写成「《产品设计文档》X.Y」而不是
+ * `§X.Y`，否则会被本文档的编号体系误判。
  *
  * 设计原则：零依赖、零配置，直接 `npm test` 运行。
  */
@@ -79,6 +84,22 @@ function checkFile(relPath) {
     problems.push("缺少一级标题（# 标题）");
   } else if (h1Count > 1) {
     problems.push(`存在 ${h1Count} 个一级标题，应只有 1 个`);
+  }
+
+  // 5. §章节引用必须指向本文档中真实存在的标题
+  const headingNumbers = new Set();
+  for (const line of text.split("\n")) {
+    const match = /^#{1,6}\s+(\d+(?:\.\d+)*)[.、\s]/.exec(line);
+    if (match) headingNumbers.add(match[1]);
+  }
+  const reported = new Set();
+  for (const match of text.matchAll(/§(\d+(?:\.\d+)*)/g)) {
+    const ref = match[1];
+    if (reported.has(ref)) continue;
+    reported.add(ref);
+    if (!headingNumbers.has(ref)) {
+      problems.push(`章节引用 §${ref} 在本文档中不存在对应标题`);
+    }
   }
 
   return problems;
