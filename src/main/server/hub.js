@@ -38,6 +38,8 @@ export function createHub(options = {}) {
 
   /** clientId → 该连接的发送函数。会话知道角色，这里知道往哪儿写。 */
   const sockets = new Map();
+  /** clientId → 连接自己的信息（目前只有 IP）。 */
+  const contexts = new Map();
   let timer = null;
   let closed = false;
 
@@ -102,13 +104,15 @@ export function createHub(options = {}) {
    * 发送函数自己知道"怎么关一条 WebSocket"，hub 不需要知道 ——
    * 这是它跟 `websocket.js` 之间唯一的接口。
    */
-  function attach(clientId, write) {
+  function attach(clientId, write, context = {}) {
     if (closed) return;
     sockets.set(clientId, write);
+    contexts.set(clientId, context);
   }
 
   /** 连接断了。会话那边也要知道，否则在线人数会一直挂着一个幽灵。 */
   function detach(clientId) {
+    contexts.delete(clientId);
     if (!sockets.delete(clientId)) return;
     deliver(session.leave(clientId));
   }
@@ -138,7 +142,13 @@ export function createHub(options = {}) {
     }
 
     counts.received += 1;
-    const actions = session.receive(clientId, message.event, message.payload, clock());
+    const actions = session.receive(
+      clientId,
+      message.event,
+      message.payload,
+      clock(),
+      contexts.get(clientId) ?? {},
+    );
     return deliver(actions);
   }
 
@@ -178,6 +188,7 @@ export function createHub(options = {}) {
     closed = true;
     stop();
     sockets.clear();
+    contexts.clear();
   }
 
   return {

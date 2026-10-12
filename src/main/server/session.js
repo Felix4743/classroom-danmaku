@@ -487,7 +487,7 @@ export function createSession(options = {}) {
    * 老师点"拉黑"会安静地什么都不发生；`host:config` 的 `duration`
    * 要是 `null`，`Number(null) === 0` 会让所有弹幕一帧穿过屏幕。
    */
-  function receive(clientId, event, payload, ts = clock()) {
+  function receive(clientId, event, payload, ts = clock(), context = {}) {
     if (typeof event !== "string" || !CLIENT_EVENTS.includes(event)) {
       return [errorTo(clientId, ERROR_CODE.UNKNOWN_EVENT, "不认识这个消息")];
     }
@@ -508,7 +508,8 @@ export function createSession(options = {}) {
     }
 
     if (event === C2S.JOIN) {
-      return join({ ...normalized.value, clientId, ts });
+      // ip 来自连接本身，不能由客户端自报 —— 否则 IP 级限流就是一句空话
+      return join({ ...normalized.value, clientId, ts, ip: context.ip ?? null });
     }
 
     const client = clients.get(clientId);
