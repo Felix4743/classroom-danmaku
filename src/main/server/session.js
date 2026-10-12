@@ -167,12 +167,18 @@ export function createSession(options = {}) {
       throw new TypeError("join 需要 clientId");
     }
 
-    // 重连时复用原来的 deviceId，限流与拉黑才追得住同一个人
-    const deviceId = input.deviceId ?? randomUUID();
-    const device = deviceFor(deviceId, ts);
-    if (nickname) device.nickname = nickname;
-    if (identity) device.identity = identity;
-    device.lastSeen = ts;
+    // 重连时复用原来的 deviceId，限流与拉黑才追得住同一个人。
+    //
+    // overlay 与 screen 不是人：它们没有身份，也不发弹幕。**故意不给它们
+    // deviceId**，这样 §4.4 的红线可以写成"投影收到的任何消息里都不许出现
+    // deviceId"，而不是"不许出现别人的 deviceId" —— 后一种说法要靠人工判断
+    // 谁是谁，前一种可以直接写成断言，而且永远不用改。
+    const isPerson = role === ROLE.STUDENT || role === ROLE.HOST;
+    const deviceId = isPerson ? (input.deviceId ?? randomUUID()) : null;
+    const device = isPerson ? deviceFor(deviceId, ts) : null;
+    if (device && nickname) device.nickname = nickname;
+    if (device && identity) device.identity = identity;
+    if (device) device.lastSeen = ts;
 
     if (role === ROLE.STUDENT && limiter.isBanned(deviceId)) {
       counts.kicked += 1;
@@ -183,18 +189,21 @@ export function createSession(options = {}) {
       clientId,
       role,
       deviceId,
-      nickname: device.nickname,
+      nickname: device?.nickname ?? null,
       ip: ip ?? null,
       joinedAt: ts,
     });
 
+    const joinedPayload = {
+      serverTime: ts,
+      config: configPayload(),
+      online: studentsOnline(),
+    };
+    // 只有真的需要重连的人才有身份可以复用
+    if (deviceId) joinedPayload.deviceId = deviceId;
+
     const actions = [
-      send(clientId, S2C.JOINED, {
-        deviceId,
-        serverTime: ts,
-        config: configPayload(),
-        online: studentsOnline(),
-      }),
+      send(clientId, S2C.JOINED, joinedPayload),
       // §4.3.2：重连之后必须全量同步。增量同步是幽灵弹幕的温床
       send(clientId, S2C.STATE, statePayload()),
     ];

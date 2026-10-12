@@ -157,7 +157,13 @@ test("端口被占用时自动递增（§7.4）", async (t) => {
   });
   t.after(() => new Promise((done) => second.server.close(done)));
 
-  assert.equal(second.port, first.port + 1, "被占用时应当用下一个端口");
+  // 递增行为本身。这里**不能**断言"恰好 +1"：`node --test` 会并行跑多个
+  // 测试文件，紧邻的那个端口完全可能正被别的文件占着，于是重试会走到 +2。
+  // 要钉住的是"往后找、且没跑出重试预算"，那是 §7.4 真正要求的东西。
+  assert.ok(
+    second.port > first.port && second.port < first.port + 10,
+    `被占用时应当从原端口之后找一个空闲的，实际用了 ${second.port}（原本想用 ${first.port}）`,
+  );
   assert.equal((await request(second.url, "/shared/config.js")).status, 200);
 });
 
