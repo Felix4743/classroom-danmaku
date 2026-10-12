@@ -9,6 +9,7 @@
  * 而老师完全不知道为什么。
  *
  * 所以这里的做法是**打分 + 排序**，而不是"取第一个"：
+ *   · 电脑热点                   120 分 ← 学生就指望着连它（见下面 HOTSPOT 的说明）
  *   · 物理网卡 + 私有地址      100 分 ← 想找的就是它
  *   · 物理网卡 + 其它 IPv4      60 分 ← 能用，但很可能是校园网公网地址段
  *   · 虚拟网卡                   0 分，直接排除
@@ -45,6 +46,32 @@ export const VIRTUAL_PATTERNS = [
 /** 169.254.0.0/16：网卡没能从路由器拿到地址时给自己编的地址。 */
 const APIPA = ["169.254.0.0", 16];
 
+/**
+ * Windows「移动热点」的痕迹。
+ *
+ * 为什么它要排在物理网卡前面：这张网卡**只可能是老师主动打开热点才存在的**
+ * —— 没有第二种理由。而热点存在的全部意义就是"让别的设备连上我"，所以
+ * 当它和以太网同时在的时候，学生几乎一定在热点这一侧。反过来把以太网排
+ * 前面，老师屏幕上就会出现一个学生路由不到的地址，而二维码看起来完全正常。
+ *
+ * 两个特征任一命中即算：
+ *   · 名字是 `本地连接* 10` / `Local Area Connection* 10`（Windows 给热点
+ *     虚拟网卡起的名字），或者 Wi-Fi Direct 一类的别名
+ *   · 地址恰好是 `192.168.137.1` —— 这是 Windows 共享网络固定的主机地址
+ *
+ * 第二个特征必须**精确到 .1**：家用路由器完全可能发 192.168.137.x 的地址
+ * 给一张普通无线网卡，那种网卡不该被当成热点（它是物理网卡，走 PRIVATE 分）。
+ */
+export const HOTSPOT_PATTERNS = [
+  /^本地连接\s*\*/,
+  /^Local Area Connection\s*\*/i,
+  /wi-?fi\s*direct/i,
+  /mobile\s*hotspot/i,
+];
+
+/** Windows 共享网络（ICS）固定的主机地址。 */
+export const HOTSPOT_HOST = "192.168.137.1";
+
 /** 私有地址段（RFC 1918）。 */
 const PRIVATE_RANGES = [
   ["10.0.0.0", 8],
@@ -52,7 +79,12 @@ const PRIVATE_RANGES = [
   ["192.168.0.0", 16],
 ];
 
-export const SCORE = Object.freeze({ PRIVATE: 100, OTHER: 60, EXCLUDED: 0 });
+export const SCORE = Object.freeze({
+  HOTSPOT: 120,
+  PRIVATE: 100,
+  OTHER: 60,
+  EXCLUDED: 0,
+});
 
 /** 把点分十进制转成 32 位整数。不是合法 IPv4 就返回 null。 */
 export function ipv4ToInt(address) {
@@ -91,6 +123,13 @@ export function isPrivateIPv4(address) {
 export function isVirtualInterface(name) {
   if (typeof name !== "string") return false;
   return VIRTUAL_PATTERNS.some((pattern) => pattern.test(name));
+}
+
+/** 这张网卡是不是 Windows 移动热点（老师主动开出来的那一张）。 */
+export function isHotspotInterface(name, address) {
+  if (address === HOTSPOT_HOST) return true;
+  if (typeof name !== "string") return false;
+  return HOTSPOT_PATTERNS.some((pattern) => pattern.test(name));
 }
 
 /** `http://<地址>:<端口><路径>`。刻意用模板串拼，避免仓库里出现写死的外部地址。 */
@@ -146,11 +185,15 @@ export function collectCandidates(interfaces, { port = 3000 } = {}) {
       if (virtual) continue;
 
       const priv = isPrivateIPv4(address);
+      const hotspot = isHotspotInterface(name, address);
       candidates.push({
         name,
         address,
         scope: priv ? "lan" : "other",
-        score: priv ? SCORE.PRIVATE : SCORE.OTHER,
+        // 热点地址本身也是私有地址，所以 scope 仍然是 lan —— 界面靠 hotspot
+        // 这个字段把它说成「电脑热点」，而不是让 describeChoice 去报"不是局域网"
+        hotspot,
+        score: hotspot ? SCORE.HOTSPOT : priv ? SCORE.PRIVATE : SCORE.OTHER,
         url: pageUrl(address, port),
       });
     }
@@ -168,6 +211,13 @@ export function collectCandidates(interfaces, { port = 3000 } = {}) {
       "没有找到可用的局域网地址（剩下的都是虚拟网卡或回环地址），" +
         "先确认教室电脑真的连上了网络",
     );
+  }
+
+  // 热点和别的网卡同时在线的时候，程序**没法知道**学生连的是哪一个 ——
+  // 热点的地址给热点里的学生用，别的地址给同一局域网里的学生用，两者不通用。
+  // 这不是错误，所以只把出口指出来：那个按钮只在多条候选时才出现。
+  if (candidates.length > 1 && candidates.some((c) => c.hotspot)) {
+    warnings.push("这台电脑上有多个能给学生用的地址，学生连不上就点「换一个地址」换一个试试");
   }
 
   return { candidates, warnings };

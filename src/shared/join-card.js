@@ -112,7 +112,9 @@ export function describeChoice(choice, options = {}) {
   const { best = null, showAddress = true } = options;
   const bits = [];
   if (best && choice.address === best.address) bits.push("推荐");
-  if (choice.name) bits.push(choice.name);
+  // 热点网卡的真名是「本地连接* 10」这种，对老师来说等于没写，所以换个说法
+  if (choice.hotspot) bits.push("电脑热点");
+  else if (choice.name) bits.push(choice.name);
   if (showAddress) bits.push(choice.address);
   if (choice.scope && choice.scope !== "lan") bits.push("不是局域网地址，学生多半连不上");
   return bits.join(" · ");

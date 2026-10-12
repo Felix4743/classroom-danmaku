@@ -365,9 +365,10 @@ function renderJoinCard() {
   );
   dom.joinNext.hidden = !picker?.multiple;
 
-  // 地址探测的提醒（网卡没拿到 IP、只剩虚拟网卡…）不塞进 banner：
-  // banner 是"服务端拒绝了什么操作"的地方，混在一起会让两件事都变模糊
-  const warning = picker?.warnings?.[0] ?? "";
+  // 地址探测的提醒（网卡没拿到 IP、热点和别的网卡同时在、防火墙没放行…）
+  // 不塞进 banner：banner 是"服务端拒绝了什么操作"的地方，混在一起会让两件事都变模糊。
+  // 全部拼出来而不是只显示第一条 —— 只显示第一条会让后面的提醒被悄悄吃掉。
+  const warning = (picker?.warnings ?? []).filter((line) => line).join(" ");
   dom.joinWarn.textContent = warning;
   dom.joinWarn.hidden = warning === "";
 }

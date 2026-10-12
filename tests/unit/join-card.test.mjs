@@ -178,6 +178,13 @@ describe("describeChoice", () => {
     assert.match(text, /不是局域网地址/);
   });
 
+  test("热点网卡要说「电脑热点」，不能把「本地连接* 10」甩给老师", () => {
+    const hotspot = { name: "本地连接* 10", address: "192.168.137.1", scope: "lan", hotspot: true };
+    assert.equal(describeChoice(hotspot, { best: hotspot }), "推荐 · 电脑热点 · 192.168.137.1");
+    // 热点是私有地址，不能说它"不是局域网"
+    assert.doesNotMatch(describeChoice(hotspot, { best: hotspot }), /不是局域网/);
+  });
+
   test("空输入给空串", () => {
     assert.equal(describeChoice(null), "");
     assert.equal(describeChoice({}), "");

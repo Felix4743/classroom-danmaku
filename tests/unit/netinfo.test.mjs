@@ -16,6 +16,7 @@ import {
   inRange,
   ipv4ToInt,
   isApipaIPv4,
+  isHotspotInterface,
   isPrivateIPv4,
   isVirtualInterface,
   pageUrl,
@@ -115,6 +116,98 @@ test("虚拟网卡即使拿着 192.168 也不要", () => {
   );
 
   assert.deepEqual(candidates.map((c) => c.address), ["192.168.1.7"]);
+});
+
+test("电脑热点排在以太网前面：学生几乎一定在热点那一侧", () => {
+  // 这是真机上踩到的顺序：老师开着移动热点给学生连，但以太网也在，
+  // 而「以太网」按码位比「本地连接* 10」小，于是二维码指向了以太网 ——
+  // 学生连的是热点，路由不保证通。热点是老师**主动开出来**的，
+  // 它存在的唯一理由就是"让别的设备连上我"。
+  const { candidates } = collectCandidates(
+    {
+      以太网: [nic("10.109.12.63")],
+      "本地连接* 10": [nic("192.168.137.1")],
+    },
+    { port: 3000 },
+  );
+
+  assert.equal(candidates[0].address, "192.168.137.1");
+  assert.equal(candidates[0].hotspot, true);
+  assert.equal(candidates[0].score, SCORE.HOTSPOT);
+  assert.ok(candidates[0].score > candidates[1].score);
+  assert.equal(candidates[1].hotspot, false);
+  // 热点地址本身是私有的，所以 scope 仍然是 lan —— 界面不该说它"不是局域网"
+  assert.equal(candidates[0].scope, "lan");
+});
+
+test("热点靠地址认出：192.168.137.1 就是共享网络的主机地址", () => {
+  const { candidates } = collectCandidates(
+    {
+      以太网: [nic("10.0.0.5")],
+      "Local Area Connection* 3": [nic("192.168.137.1")],
+    },
+    { port: 3000 },
+  );
+
+  assert.equal(candidates[0].address, "192.168.137.1");
+  assert.equal(candidates[0].hotspot, true);
+});
+
+test("家用路由器发 192.168.137.x 不算热点：必须精确到 .1", () => {
+  // 普通无线网卡拿到 192.168.137.23 是路由器随手发的地址，
+  // 把它当热点会凭空抬高它的优先级，压过真正该推荐的网卡。
+  const { candidates } = collectCandidates(
+    {
+      WLAN: [nic("192.168.137.23")],
+      以太网: [nic("10.0.0.5")],
+    },
+    { port: 3000 },
+  );
+
+  const wlan = candidates.find((c) => c.address === "192.168.137.23");
+  assert.equal(wlan.hotspot, false);
+  assert.equal(wlan.score, SCORE.PRIVATE);
+  assert.equal(wlan.score, candidates.find((c) => c.address === "10.0.0.5").score);
+});
+
+test("isHotspotInterface：名字和地址任一命中即算", () => {
+  assert.equal(isHotspotInterface("本地连接* 10", "192.168.1.5"), true);
+  assert.equal(isHotspotInterface("Local Area Connection* 3", "10.0.0.9"), true);
+  assert.equal(isHotspotInterface("WLAN", "192.168.137.1"), true);
+  assert.equal(isHotspotInterface("WLAN", "192.168.1.5"), false);
+  assert.equal(isHotspotInterface(null, "192.168.1.5"), false);
+  assert.equal(isHotspotInterface(undefined, undefined), false);
+});
+
+test("热点和别的网卡同时在时，必须把「换一个地址」这个出口说出来", () => {
+  // 程序没法知道学生连的是热点还是以太网，所以不能沉默 ——
+  // 沉默的结果是老师盯着一个扫了打不开的二维码，而按钮就在旁边
+  const { warnings } = collectCandidates(
+    {
+      以太网: [nic("10.109.12.63")],
+      "本地连接* 10": [nic("192.168.137.1")],
+    },
+    { port: 3000 },
+  );
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /换一个地址/);
+});
+
+test("只有一张网卡时不要提「换一个地址」：那个按钮根本不会出现", () => {
+  const { warnings } = collectCandidates({ 以太网: [nic("10.109.12.63")] }, { port: 3000 });
+  assert.deepEqual(warnings, []);
+});
+
+test("两块普通网卡同时在，也不提「换一个地址」—— 那不是需要老师做判断的场合", () => {
+  const { warnings } = collectCandidates(
+    {
+      以太网: [nic("10.109.12.63")],
+      WLAN: [nic("192.168.1.7")],
+    },
+    { port: 3000 },
+  );
+  assert.deepEqual(warnings, []);
 });
 
 test("APIPA 要报警而不是静默跳过", () => {
