@@ -35,6 +35,23 @@
 
       <p id="banner" class="banner" hidden></p>
 
+      <!--
+        扫码入口（§4.10）。放在控制台的最上面：上课第一件事就是把学生放进来，
+        之后老师收起控制台，它就跟着一起藏起来了。
+      -->
+      <section class="join">
+        <h2>让学生扫码进来</h2>
+        <div class="join-body">
+          <canvas id="join-qr" class="join-qr" width="176" height="176"></canvas>
+          <div class="join-text">
+            <p id="join-url" class="join-url">正在查本机地址…</p>
+            <p id="join-hint" class="note"></p>
+            <p id="join-warn" class="warn" hidden></p>
+            <button id="join-next" class="link" type="button" hidden>换一个地址</button>
+          </div>
+        </div>
+      </section>
+
       <main class="pool-wrap">
         <h2>待回应</h2>
         <ul id="pool" class="pool"></ul>

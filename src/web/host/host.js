@@ -12,6 +12,11 @@
 
 import { CONFIG_LIMITS, DEFAULT_CONFIG } from "../../shared/config.js";
 import { STATUS, createClassroomClient } from "../../shared/client.js";
+import {
+  createAddressPicker,
+  loadServerInfo,
+  paintJoinCard,
+} from "../../shared/join-card.js";
 import { C2S, ROLE, S2C } from "../../shared/protocol.js";
 
 const CLASS_ID = "default"; // 一台服务只上一节课（和学生页同一个约定）
@@ -37,6 +42,11 @@ const dom = {
   collapse: document.getElementById("collapse"),
   consoleStatus: document.getElementById("console-status"),
   banner: document.getElementById("banner"),
+  joinQr: document.getElementById("join-qr"),
+  joinUrl: document.getElementById("join-url"),
+  joinHint: document.getElementById("join-hint"),
+  joinWarn: document.getElementById("join-warn"),
+  joinNext: document.getElementById("join-next"),
   pool: document.getElementById("pool"),
   poolEmpty: document.getElementById("pool-empty"),
   done: document.getElementById("done"),
@@ -62,6 +72,8 @@ let config = { ...DEFAULT_CONFIG };
 let serverState = { paused: false, mutedUntil: 0, online: 0, danmakuCount: 0 };
 let lastAlert = null;
 let flashUntil = 0;
+/** §4.10 的扫码卡片。`picker` 为 null 表示还没查到地址（或者查失败了）。 */
+let joinCard = null;
 
 // ── 渲染 ────────────────────────────────────────────────────────────────
 
@@ -330,6 +342,52 @@ const handlers = {
   [S2C.REJECTED]: () => {},
 };
 
+// ── 扫码入口（§4.10） ───────────────────────────────────────────────────
+
+/**
+ * 画一次卡片，并把「换一个地址」按钮的显隐定下来。
+ *
+ * 按钮在多条候选时才出现：只有一个地址的话，按它什么都不会变，
+ * 老师按两下就会开始怀疑是不是坏了。
+ */
+function renderJoinCard() {
+  const picker = joinCard;
+  paintJoinCard(
+    { canvas: dom.joinQr, urlText: dom.joinUrl, hintText: dom.joinHint },
+    picker?.current ?? null,
+    { best: picker?.best ?? null },
+  );
+  dom.joinNext.hidden = !picker?.multiple;
+
+  // 地址探测的提醒（网卡没拿到 IP、只剩虚拟网卡…）不塞进 banner：
+  // banner 是"服务端拒绝了什么操作"的地方，混在一起会让两件事都变模糊
+  const warning = picker?.warnings?.[0] ?? "";
+  dom.joinWarn.textContent = warning;
+  dom.joinWarn.hidden = warning === "";
+}
+
+/**
+ * 查地址这件事**不能挡住页面**。
+ *
+ * 网卡枚举在虚拟机、断线 VPN 上偶尔会卡几秒，而老师正站在讲台上等这个页面。
+ * 所以它是后台跑的：先让控制台照常可用，地址回来后自己填进去。
+ */
+async function loadJoinCard() {
+  try {
+    const info = await loadServerInfo();
+    const picker = createAddressPicker(info);
+    // best 单独存着：picker.current 会随着「换一个地址」变，但"推荐"始终指首选
+    joinCard = Object.assign(picker, {
+      best: info?.best ?? null,
+      warnings: Array.isArray(info?.warnings) ? info.warnings : [],
+    });
+  } catch (error) {
+    joinCard = null;
+    console.warn("[host] 查学生地址失败", error?.message ?? error);
+  }
+  renderJoinCard();
+}
+
 // ── 参数滑块 ────────────────────────────────────────────────────────────
 
 const sliderInputs = new Map();
@@ -428,11 +486,19 @@ dom.export.addEventListener("click", () => {
   send(C2S.HOST_EXPORT, {});
 });
 
+// 「换一个地址」是纯本地操作，不经过服务端 —— 它只是换一张二维码
+dom.joinNext.addEventListener("click", () => {
+  joinCard?.next();
+  renderJoinCard();
+});
+
 function render() {
   renderPool();
 }
 
 buildSliders();
+// 二维码是后台查的，页面不等它（见 loadJoinCard 的说明）
+loadJoinCard();
 
 client = createClassroomClient({
   url: `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`,

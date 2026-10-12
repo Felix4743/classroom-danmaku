@@ -369,3 +369,55 @@ body {
   word-break: break-all;
   user-select: all;
 }
+
+/* ── 扫码入口（§4.10） ───────────────────────────────────────────────── */
+
+.join {
+  margin: 12px 14px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.join h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.join-body {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/*
+ * 二维码的底色写死白色：它必须在任何主题下都是白底黑块。
+ * 跟着暗色主题走的话，扫码 App 的识别率会明显下降。
+ */
+.join-qr {
+  flex: 0 0 auto;
+  width: 132px;
+  height: 132px;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.join-text {
+  min-width: 0;
+}
+
+.join-url {
+  margin: 0 0 6px;
+  color: var(--text);
+  font: 13px/1.4 ui-monospace, Consolas, monospace;
+  /* 网址要能被整个读出来，断行也不能藏在按钮后面 */
+  word-break: break-all;
+  user-select: all;
+}
+
+.warn {
+  margin: 6px 0;
+  color: var(--warn);
+  font-size: 13px;
+}

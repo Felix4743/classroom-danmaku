@@ -16,6 +16,18 @@
     <canvas id="stage"></canvas>
 
     <!--
+      扫码入口（§4.10）。上课头两分钟挂在这儿，之后就自己收起来（见
+      shared/join-card.js 的 AUTO_HIDE_MS）—— 二维码盖在课件上，
+      一开始是"怎么进来"，久了就只是挡字。
+      老师想再看一眼：`?qr=1` 钉住，`?qr=0` 永远不要。
+    -->
+    <aside id="join" class="join" hidden>
+      <canvas id="join-qr" class="join-qr" width="176" height="176"></canvas>
+      <p id="join-url" class="join-url"></p>
+      <p id="join-hint" class="join-hint"></p>
+    </aside>
+
+    <!--
       投影上永远不出现学生身份（§4.4 红线）。这个角标只有连接状态和几个
       自己人看的数字，默认隐藏，加 ?diag 才出来 —— 投影的画面上不该有
       「正在重连」之外的任何字。

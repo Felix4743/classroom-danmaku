@@ -13,6 +13,13 @@
 
 import { createClassroomClient, STATUS } from "../../shared/client.js";
 import { clampConfig, DEFAULT_CONFIG } from "../../shared/config.js";
+import {
+  createAddressPicker,
+  joinCardVisible,
+  loadServerInfo,
+  paintJoinCard,
+  parseQrParam,
+} from "../../shared/join-card.js";
 import { ROLE, S2C } from "../../shared/protocol.js";
 import {
   CanvasDanmakuView,
@@ -26,6 +33,9 @@ const CLASS_ID = "default";
 
 const params = new URLSearchParams(location.search);
 const OVERLAY_MODE = params.get("mode") === "overlay";
+/** `?qr=` 的三态：true 钉住、false 永不显示、null 按时间自动收（见 join-card.js）。 */
+const QR_FORCE = parseQrParam(params.get("qr"));
+const OPENED_AT = Date.now();
 
 /*
  * 所有 id 都写成字面量，不用 `el(id)` 这类小工具。
@@ -43,6 +53,10 @@ const dom = {
   hudDropped: document.getElementById("hud-dropped"),
   status: document.getElementById("status"),
   statusText: document.getElementById("status-text"),
+  join: document.getElementById("join"),
+  joinQr: document.getElementById("join-qr"),
+  joinUrl: document.getElementById("join-url"),
+  joinHint: document.getElementById("join-hint"),
 };
 
 if (OVERLAY_MODE) document.body.classList.add("mode-overlay");
@@ -170,6 +184,43 @@ function renderStatus() {
   }
 }
 
+// ── 扫码入口（§4.10） ────────────────────────────────────────────────────
+
+let joinPicker = null;
+
+/**
+ * 卡片的显隐每秒重算一次（复用下面那个已经是每秒一次的时钟）。
+ *
+ * `joinPicker` 为空时永远不显示：查不到地址就不该挂一个空二维码上去，
+ * 那比不显示更糟 —— 学生扫了没反应，只会以为是自己手机的问题。
+ */
+function refreshJoin() {
+  const visible =
+    Boolean(joinPicker?.current) &&
+    joinCardVisible({ force: QR_FORCE, openedAt: OPENED_AT, now: Date.now() });
+  dom.join.hidden = !visible;
+}
+
+async function loadJoinCard() {
+  try {
+    const info = await loadServerInfo();
+    joinPicker = createAddressPicker(info);
+    paintJoinCard(
+      { canvas: dom.joinQr, urlText: dom.joinUrl, hintText: dom.joinHint },
+      joinPicker.current,
+      { best: info?.best ?? null },
+    );
+  } catch (error) {
+    // 投影上不出现"出错"这类字。查不到就干脆不显示卡片，原因由老师端去说
+    // —— 老师端是给人看的屏，投影是给一屋子人看的屏，两边的容错度不一样
+    joinPicker = null;
+    console.warn("[screen] 查学生地址失败", error?.message ?? error);
+  }
+  refreshJoin();
+}
+
+loadJoinCard();
+
 // ── 主循环（§4.2.1） ─────────────────────────────────────────────────────────
 
 let lastHudAt = 0;
@@ -219,5 +270,9 @@ const client = createClassroomClient({
 
 client.open();
 
-// 静音是有时限的，到点了提示条要自己消失，没有别的时钟
-setInterval(renderStatus, 1000);
+// 静音是有时限的，提示条要自己消失；二维码到点了也要自己收起来。
+// 两件事都只需要一个每秒的时钟，就共用一个
+setInterval(() => {
+  renderStatus();
+  refreshJoin();
+}, 1000);

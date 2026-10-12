@@ -89,3 +89,53 @@ body.mode-overlay .status {
   /* 透明窗口里"我连不上了"这件事由老师手机负责，投影上不再多一层 */
   display: none;
 }
+
+/*
+ * 扫码入口（§4.10）。
+ *
+ * 放在右下角：左上角是置顶条，右上角是 ?diag 的角标，正下方是状态条。
+ * 弹幕从左边飞出来、轨道是从上往下分的，右下角是画面上最安静的一块，
+ * 一节课开头那两分钟挂在这儿不会挡任何东西。
+ */
+.join {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(12, 14, 18, 0.82);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+/* 二维码必须白底黑块：对比度不够就扫不出来，而"扫不出来"在教室里
+   表现为"这程序坏了"，老师没有任何办法当场查 */
+.join-qr {
+  display: block;
+  width: 176px;
+  height: 176px;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.join-url {
+  margin: 0;
+  color: #ffffff;
+  font: 15px/1.4 ui-monospace, Consolas, monospace;
+  letter-spacing: 0.02em;
+}
+
+.join-hint {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 13px;
+}
+
+body.mode-overlay .join {
+  /* 透明窗口里这层底是叠在 PPT 上的，得再淡一点，别像贴了张纸 */
+  background: rgba(12, 14, 18, 0.72);
+}
