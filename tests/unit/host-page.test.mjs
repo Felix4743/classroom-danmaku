@@ -75,9 +75,6 @@ test("老师端：收到弹幕就进问题池，徽章跟着动", async () => {
   assert.equal(rows(els, "pool").length, 2);
   assert.equal(els.get("badge-count").textContent, "2");
   assert.equal(els.get("badge").dataset.level, "some");
-
-  // 有东西可看的时候，空态文案必须收起来
-  assert.equal(els.get("pool-empty").hidden, true);
 });
 
 test("老师端：点赞和聚合都显示在同一条上", async () => {
@@ -123,7 +120,7 @@ test("老师端：删掉的弹幕从列表里消失", async () => {
   socket.deliver({ event: "danmaku:remove", payload: { id: "d1", reason: "host" } });
 
   assert.equal(rows(els, "pool").length, 0);
-  assert.equal(els.get("pool-empty").hidden, false);
+  assert.equal(els.get("badge-count").textContent, "0");
 });
 
 test("老师端：提醒到达时闪一下并震动（§4.6）", async () => {

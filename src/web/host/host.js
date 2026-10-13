@@ -56,7 +56,6 @@ const dom = {
   tunnelToggle: document.getElementById("tunnel-toggle"),
   tunnelLink: document.getElementById("tunnel-link"),
   pool: document.getElementById("pool"),
-  poolEmpty: document.getElementById("pool-empty"),
   done: document.getElementById("done"),
   doneTitle: document.getElementById("done-title"),
   clear: document.getElementById("clear"),
@@ -196,7 +195,6 @@ function renderPool() {
   const done = live.filter((item) => item.resolved).slice(-DONE_LIMIT);
 
   dom.pool.replaceChildren(...waiting.map(renderRow));
-  dom.poolEmpty.hidden = waiting.length > 0;
 
   dom.doneTitle.hidden = done.length === 0;
   dom.done.replaceChildren(...done.map(renderRow));

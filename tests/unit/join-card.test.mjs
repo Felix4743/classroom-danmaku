@@ -10,17 +10,14 @@ import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
 import {
-  AUTO_HIDE_MS,
   LAN_NOTICE,
   NO_ADDRESS_HINT,
   WAN_NOTICE,
   addressChoices,
   createAddressPicker,
   describeChoice,
-  joinCardVisible,
   loadServerInfo,
   paintJoinCard,
-  parseQrParam,
 } from "../../src/shared/join-card.js";
 
 /** 记录调用的假画布。真实的 qrcode.js 只要 ctx.fillStyle / fillRect 就够。 */
@@ -314,25 +311,5 @@ describe("局域网前提那句话", () => {
 
   test("不能是空串，也不能是默认隐藏的那种提示", () => {
     assert.ok(LAN_NOTICE.length >= 12, "太短了，讲台上没人看得懂");
-  });
-});
-
-describe("显隐", () => {
-  test("?qr=1 永远钉住，?qr=0 永远不要", () => {
-    const late = { force: true, openedAt: 0, now: AUTO_HIDE_MS * 10 };
-    assert.equal(joinCardVisible(late), true);
-    assert.equal(joinCardVisible({ force: false, openedAt: 0, now: 0 }), false);
-  });
-
-  test("默认头两分钟显示，之后就收起来", () => {
-    assert.equal(joinCardVisible({ openedAt: 1000, now: 1000 }), true);
-    assert.equal(joinCardVisible({ openedAt: 1000, now: 1000 + AUTO_HIDE_MS - 1 }), true);
-    assert.equal(joinCardVisible({ openedAt: 1000, now: 1000 + AUTO_HIDE_MS }), false);
-  });
-
-  test("parseQrParam 认三种写法，认不出来当没写", () => {
-    for (const raw of ["1", "true", "yes"]) assert.equal(parseQrParam(raw), true);
-    for (const raw of ["0", "false", "no"]) assert.equal(parseQrParam(raw), false);
-    for (const raw of ["", null, undefined, "可能"]) assert.equal(parseQrParam(raw), null);
   });
 });

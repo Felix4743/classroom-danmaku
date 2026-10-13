@@ -16,17 +16,14 @@
     <canvas id="stage"></canvas>
 
     <!--
-      扫码入口（§4.10）。上课头两分钟挂在这儿，之后就自己收起来（见
-      shared/join-card.js 的 AUTO_HIDE_MS）—— 二维码盖在课件上，
-      一开始是"怎么进来"，久了就只是挡字。
-      老师想再看一眼：`?qr=1` 钉住，`?qr=0` 永远不要。
+      投影上**没有**扫码入口（§4.10）。
+      早先这里是右下角一张带二维码的卡片，挂两分钟再自己收起来，本意是"上课
+      开头把学生放进来"。真实课堂的反馈是它挡课件：投影是给一屋子人看的那块
+      屏，上面多一个方块就少一块板书。所以二维码只剩老师端一处 —— 老师自己
+      看着扫码，或者把老师端投出来。
+      另外那张卡片当初还带着三行写给老师看的诊断字（网址、"推荐 · 以太网 ·
+      10.109.12.63"、"要连同一个 Wi-Fi"），投给全班看本来也没有意义。
     -->
-    <aside id="join" class="join" hidden>
-      <canvas id="join-qr" class="join-qr" width="176" height="176"></canvas>
-      <p id="join-url" class="join-url"></p>
-      <p id="join-hint" class="join-hint"></p>
-      <p id="join-notice" class="join-notice"></p>
-    </aside>
 
     <!--
       投影上永远不出现学生身份（§4.4 红线）。这个角标只有连接状态和几个

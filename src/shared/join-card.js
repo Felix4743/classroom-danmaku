@@ -1,10 +1,12 @@
 /**
  * 「扫码进来」这张卡片（§4.10）。
  *
- * 投影上要有一个二维码，老师手机上也要有一个 —— 同一个二维码、同一个网址，
- * 所以两边的取数、选地址、画码、写说明都放在这里，页面只管把它挂到 DOM 上。
+ * 二维码现在**只有老师端有**（`/host/`）。投影上曾经也挂一张，两分钟后再自己
+ * 收起来，想法是"上课开头把学生放进来"；现场的结论是它挡课件 —— 投影是给
+ * 一屋子人看的那块屏，上面多一个方块就少一块板书。所以投影页现在一个字的
+ * 扫码信息都没有，这件事整个收在老师端。
  *
- * 为什么老师手机上也要有：投影是给学生的，老师自己看不见。真出现"学生连不上"
+ * 为什么老师端必须有：投影是给学生的，老师自己看不见。真出现"学生连不上"
  * 的时候，老师得能对着自己的手机念出那个 IP，或者换一个地址再试。
  *
  * 数据来自服务端的 `GET /api/info`（`src/main/server/info.js`）。地址探测的
@@ -17,14 +19,6 @@ export const INFO_PATH = "/api/info";
 
 /** 二维码四周的静区，单位是模块。少了它有些扫码 App 会读不出来。 */
 export const QR_MARGIN = 4;
-
-/**
- * 卡片自己消失的时间。
- *
- * 一节课开始两分钟以后，人都进来了，二维码就只是盖在课件上的一个方块。
- * 老师想再看一眼的话，老师端一直在「更多」里挂着它。
- */
-export const AUTO_HIDE_MS = 120_000;
 
 /**
  * 取服务端信息。
@@ -123,7 +117,7 @@ export function describeChoice(choice, options = {}) {
   return bits.join(" · ");
 }
 
-/** 没查到可用地址时，投影和老师端要说同一句话。 */
+/** 没查到可用地址时说的话。 */
 export const NO_ADDRESS_HINT = "没查到能给学生用的地址，请在电脑上看一眼网络连接";
 
 /**
@@ -149,7 +143,7 @@ export const WAN_NOTICE = "手机用流量也能连（走公网中转，比内�
 
 /**
  * 二维码和地址要有地方画、有地方写。用户节点一律"给就给、没给就跳过"，
- * 这样老师端和投影页可以只挂自己需要的部分。
+ * 这样调用方可以只挂自己需要的部分（老师端就没挂 `urlText` 之外的一些）。
  *
  * @param {{canvas?: object, urlText?: object, hintText?: object, noticeText?: object}} target
  */
@@ -190,22 +184,3 @@ function clearCanvas(canvas) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
-/**
- * 卡片该不该显示（见 AUTO_HIDE_MS 的说明）。
- *
- * `force` 来自 URL：`?qr=1` 永远钉着（调参页和老师演示的时候用），
- * `?qr=0` 永远不要。没有 `force` 就按时间自动收起来。
- */
-export function joinCardVisible({ force = null, openedAt, now }) {
-  if (force === true) return true;
-  if (force === false) return false;
-  return Number(now) - Number(openedAt) < AUTO_HIDE_MS;
-}
-
-/** 把 `?qr=` 的原文读成 true / false / null。 */
-export function parseQrParam(raw) {
-  if (raw === null || raw === undefined || raw === "") return null;
-  if (raw === "1" || raw === "true" || raw === "yes") return true;
-  if (raw === "0" || raw === "false" || raw === "no") return false;
-  return null;
-}

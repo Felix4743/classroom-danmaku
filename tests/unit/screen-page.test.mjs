@@ -261,3 +261,45 @@ test("投影页：重连时清空本地重建（§4.3.2）", async () => {
   tick();
   assert.equal(els.get("hud-pinned").textContent, "1", "重发之后仍然是那一条，不能变成两条");
 });
+
+// ------------------------------------------------- 投影上不放二维码（§4.10）
+
+test("投影页：一个扫码元素都没有", async () => {
+  /*
+   * 这一条是"右下角二维码一直显示"那次事故的回归钉子。
+   *
+   * 投影上原本挂着一张带二维码的卡片，两分钟后再自己收起来。收不起来是因为
+   * `.join { display: flex }` 盖掉了浏览器默认的 `[hidden] { display: none }`
+   * —— 于是二维码整节课糊在课件右下角。老师提的意见更根本：投影是给一屋子人
+   * 看的那块屏，上面本来就不该有二维码。所以现在整块删掉，而不是修显隐。
+   *
+   * 顺带把三行写给老师看的诊断字也带走了（网址、"推荐 · 以太网 · 10.109.12.63"、
+   * "要连同一个 Wi-Fi"）—— 那些字投给全班看没有意义。
+   */
+  await boot();
+  for (const id of ["join", "join-qr", "join-url", "join-hint", "join-notice"]) {
+    assert.equal(
+      globalThis.document.getElementById(id),
+      null,
+      `投影页上不该再有 #${id}`,
+    );
+  }
+});
+
+test("screen.css：`hidden` 必须真的藏得住（[hidden] 兜底不能删）", () => {
+  /*
+   * `[hidden] { display: none }` 是**用户代理样式**，优先级低到任何类选择器都能
+   * 盖过它。刚才那个二维码事故就是这么来的：screen.js 算得完全正确、
+   * `dom.join.hidden = true` 每秒都在执行，画面上却毫无变化。
+   *
+   * 投影页上现在还有 `hidden`（?diag 的角标、掉线时的状态条），将来也还会有，
+   * 所以这条兜底得一直留着 —— 老师端的 host.css 早就有同一条了。
+   */
+  const css = readFileSync(join(PAGE, "screen.css"), "utf8");
+  assert.match(
+    css,
+    /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/,
+    "[hidden] 兜底没了：只要哪个元素自己写了 display，hidden 就会失效",
+  );
+});
+
