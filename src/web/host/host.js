@@ -553,6 +553,12 @@ async function onTunnelToggle() {
 
   tunnelBusy = true;
   renderTunnel();
+  // 走授权流程时，`beginTunnelLogin()` 会把提示改成"去打开的页面里登录"，那句
+  // 比 `/api/info` 带回来的"还没绑定账号"更贴近老师此刻该做的事。而 finally 里
+  // 的 renderTunnel() 会照着 lastTunnel 把文案盖回去 —— 实测就是这一下把提示
+  // 冲掉了，老师看到弹出的登录页、页面上却还写着"还没绑定花生壳账号"。所以这
+  // 条路上跳过收尾重绘，等轮询真的拿到新状态时自然会画。
+  let keepNotice = false;
   try {
     if (state === TUNNEL_STATE.ON) {
       stopTunnelPolling();
@@ -561,6 +567,7 @@ async function onTunnelToggle() {
       return;
     }
     if (state === TUNNEL_STATE.NO_ACCOUNT) {
+      keepNotice = true;
       await beginTunnelLogin();
       return;
     }
@@ -569,9 +576,13 @@ async function onTunnelToggle() {
     if (body.tunnel?.state === TUNNEL_STATE.STARTING) pollTunnelReady();
   } catch (error) {
     dom.tunnelMsg.textContent = `操作失败：${error?.message ?? error}`;
+    keepNotice = true;
   } finally {
     tunnelBusy = false;
-    renderTunnel();
+    // 跳过重绘时也得把按钮放出来：进这一步之前刚画过一次 `tunnelBusy = true`，
+    // 不放的话它会一直灰着，老师连重试都点不动。
+    if (keepNotice) dom.tunnelToggle.disabled = false;
+    else renderTunnel();
   }
 }
 
