@@ -8,3 +8,8 @@ data/
 
 .DS_Store
 Thumbs.db
+
+# hsk-cli（花生壳内网穿透）在本目录留下的资源登记表。
+# 正常情况下它写 ~/.hsk，但 HOME 为空时会退化成 cwd，于是污染仓库根目录。
+# 里面含账号的 publicUrl / pid，不该进版本库。
+.hsk/
