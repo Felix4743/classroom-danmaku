@@ -13,7 +13,7 @@
  */
 
 import { spawn as nodeSpawn } from "node:child_process";
-import { copyFileSync, existsSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -330,6 +330,29 @@ export function createTunnelManager(options = {}) {
   let child = null;
   let cachedBinary;
 
+  // 凭据文件的位置只跟 homeDir 有关，提到外面来：`beginLogin()` 要先读它一眼，
+  // 看这台电脑是不是已经绑定过了（见那里的注释）。
+  const authPath = join(homeDir, ".hsk", "auth.json");
+  const authBackupPath = `${authPath}.dshbak`;
+
+  /**
+   * 直接读磁盘上的 `auth.json`，不跑子进程。
+   *
+   * `checkAccount()` 要 spawn 一次 `auth status`（几十毫秒起步），而这里只想知道
+   * "有没有一份能用的凭据"，读个几百字节的 JSON 更快也更准 —— `auth status` 的
+   * 结论是从这个文件推出来的，问它等于绕一圈。
+   */
+  function readAuthFile() {
+    try {
+      if (!exists(authPath)) return null;
+      const parsed = JSON.parse(readFileSync(authPath, "utf8"));
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      // 文件损坏/半截都当"没有可用凭据"：这时候起一次登录流程是对的
+      return null;
+    }
+  }
+
   function resolveBinary() {
     if (binary) return binary;
     if (cachedBinary && exists(cachedBinary)) return cachedBinary;
@@ -505,21 +528,33 @@ export function createTunnelManager(options = {}) {
   /**
    * 起一次授权流程，把要老师在浏览器里打开的链接给出来。
    *
-   * 这里有一次备份/还原。实测 `auth login` **一启动就会把 `~/.hsk/auth.json`
-   * 改写成 `status:"pending_callback"`**，哪怕这次登录最后没走完，原来那份好
-   * 好的凭据也已经被冲掉了。所以：拿到链接说明流程真的在跑，保留；没拿到链接
-   * 说明什么都没发生，立刻把备份还原回去。
+   * 两道保护，都是围绕「`auth login` 会先把 `auth.json` 冲掉」这件事：
+   *
+   * 1. **已经绑定过就根本不起这个流程。** 实测 `auth login` 一启动就把文件改写成
+   *    `status:"pending_callback"`，而它唯一的作用就是换一份新凭据 —— 原来那份
+   *    还能用的话，这次调用不会带来任何好处，只会把老师从"已绑定"变成"要重新
+   *    登录"。老师端点这个接口的前提本来就是状态是 `no_account`，这里再挡一道，
+   *    是因为接口在老师的浏览器里是可访问的，不能只靠前端的分派逻辑正确。
+   * 2. **没拿到链接就立刻还原备份。** 拿到了说明流程真的在跑（保留）；没拿到说明
+   *    什么都没发生，把备份放回去，别白白丢掉那份凭据。
    */
   async function beginLogin() {
     const bin = resolveBinary();
     if (!bin) return { ok: false, error: "no_binary", message: "找不到内置的穿透程序" };
 
-    const authPath = join(homeDir, ".hsk", "auth.json");
-    const backupPath = `${authPath}.dshbak`;
+    const onDisk = readAuthFile();
+    if (onDisk && (onDisk.status === "authenticated" || (onDisk.token && onDisk.status !== "pending_callback"))) {
+      return {
+        ok: false,
+        error: "already_bound",
+        message: "这台电脑已经绑定过花生壳账号了，不用再绑一次",
+      };
+    }
+
     let backedUp = false;
     try {
       if (exists(authPath)) {
-        copyFileSync(authPath, backupPath);
+        copyFileSync(authPath, authBackupPath);
         backedUp = true;
       }
     } catch (err) {
@@ -537,8 +572,8 @@ export function createTunnelManager(options = {}) {
     if (!authorizeUrl) {
       if (backedUp) {
         try {
-          copyFileSync(backupPath, authPath);
-          unlinkSync(backupPath);
+          copyFileSync(authBackupPath, authPath);
+          unlinkSync(authBackupPath);
         } catch (err) {
           logger.error?.("[tunnel] 还原凭据失败", err);
         }

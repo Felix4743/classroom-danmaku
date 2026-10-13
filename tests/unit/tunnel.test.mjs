@@ -409,7 +409,15 @@ test("授权流程", async (t) => {
       child.stdout.emit("data", Buffer.from(LOGIN_JSON));
       child.emit("exit", 0);
     });
-    const manager = createTunnelManager({ getPort: () => 3000, binary: "hsk.exe", spawn, logger: silent });
+    const manager = createTunnelManager({
+      getPort: () => 3000,
+      binary: "hsk.exe",
+      spawn,
+      logger: silent,
+      // 必须是空 home：默认的 homedir() 里可能真有一份 auth.json，
+      // 那样 beginLogin 会因为"已经绑定过"直接拒绝（那是另一条用例在管）
+      homeDir: tempHome(),
+    });
     const result = await manager.beginLogin();
     assert.equal(result.ok, true);
     assert.match(result.authorizeUrl, /oauth\/authorize/);
@@ -430,7 +438,7 @@ test("授权流程", async (t) => {
     const home = tempHome();
     mkdirSync(join(home, ".hsk"), { recursive: true });
     const authPath = join(home, ".hsk", "auth.json");
-    const good = '{"status":"authenticated","token":"keep-me"}';
+    const good = '{"status":"expired","refresh_token":"keep-me"}';
     writeFileSync(authPath, good, "utf8");
 
     const spawn = fakeSpawn((child) => {
@@ -458,7 +466,7 @@ test("授权流程", async (t) => {
     const home = tempHome();
     mkdirSync(join(home, ".hsk"), { recursive: true });
     const authPath = join(home, ".hsk", "auth.json");
-    writeFileSync(authPath, '{"status":"authenticated","token":"old"}', "utf8");
+    writeFileSync(authPath, '{"status":"expired","refresh_token":"old"}', "utf8");
 
     const spawn = fakeSpawn((child) => {
       writeFileSync(authPath, '{"status":"pending_callback"}', "utf8");
@@ -476,6 +484,64 @@ test("授权流程", async (t) => {
     const result = await manager.beginLogin();
     assert.equal(result.ok, true);
     assert.equal(readFileSync(authPath, "utf8"), '{"status":"pending_callback"}');
+  });
+
+  await t.test("已经绑定过就根本不起登录流程 —— 起一次只会把那份能用的凭据冲掉", async () => {
+    const home = tempHome();
+    mkdirSync(join(home, ".hsk"), { recursive: true });
+    const authPath = join(home, ".hsk", "auth.json");
+    const good = '{"version":1,"token":"still-good","status":"authenticated"}';
+    writeFileSync(authPath, good, "utf8");
+
+    const spawn = fakeSpawn((child) => {
+      child.stdout.emit("data", Buffer.from(LOGIN_JSON));
+      child.emit("exit", 0);
+    });
+
+    const manager = createTunnelManager({
+      getPort: () => 3000,
+      binary: "hsk.exe",
+      spawn,
+      logger: silent,
+      homeDir: home,
+    });
+    const result = await manager.beginLogin();
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "already_bound");
+    assert.equal(spawn.calls.length, 0, "一个子进程都不该起");
+    assert.equal(readFileSync(authPath, "utf8"), good, "凭据必须一字未动");
+  });
+
+  await t.test("凭据文件是 pending_callback / 坏掉 / 不存在时，仍然允许起登录流程", async (t) => {
+    for (const [name, content] of [
+      ["待回调的半截凭据", '{"status":"pending_callback"}'],
+      ["损坏的文件", "{ 这不是 JSON"],
+    ]) {
+      await t.test(name, async () => {
+        const home = tempHome();
+        mkdirSync(join(home, ".hsk"), { recursive: true });
+        writeFileSync(join(home, ".hsk", "auth.json"), content, "utf8");
+        const spawn = fakeSpawn((child) => {
+          child.stdout.emit("data", Buffer.from(LOGIN_JSON));
+          child.emit("exit", 0);
+        });
+        const manager = createTunnelManager({ getPort: () => 3000, binary: "hsk.exe", spawn, logger: silent, homeDir: home });
+        const result = await manager.beginLogin();
+        assert.equal(result.ok, true);
+        assert.equal(spawn.calls.length, 1);
+      });
+    }
+
+    await t.test("文件不存在", async () => {
+      const spawn = fakeSpawn((child) => {
+        child.stdout.emit("data", Buffer.from(LOGIN_JSON));
+        child.emit("exit", 0);
+      });
+      const manager = createTunnelManager({ getPort: () => 3000, binary: "hsk.exe", spawn, logger: silent, homeDir: tempHome() });
+      const result = await manager.beginLogin();
+      assert.equal(result.ok, true);
+    });
   });
 });
 

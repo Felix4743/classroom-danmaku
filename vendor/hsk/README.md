@@ -38,7 +38,8 @@
 - 它会把凭据写在 `~/.hsk/auth.json`。**`HOME` 为空时它会退而写到当前工作目录**，
   这就是 `hskEnv()` 一定要显式覆盖 `HOME`/`USERPROFILE` 的原因。
 - 授权（`auth login`）**一启动就会把 `auth.json` 冲成 `pending_callback`**，
-  所以 `beginLogin()` 调用前先备份、拿不到链接就还原。
+  所以 `beginLogin()` 先读一眼 `auth.json`：**已经绑定过就直接拒绝**，不浪费
+  那份能用的凭据；真要起的时候先备份，拿不到链接就还原。
 
 ## 升级步骤
 
