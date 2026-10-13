@@ -13,13 +13,13 @@ import { startHttpServer } from "../../src/main/server/http.js";
  * 故意**不**经过 `new URL()` 拼接 path —— URL 会把 `/../` 规范化掉，
  * 那样路径穿越的用例就永远测不到了。
  */
-export function request(base, path = "/", { method = "GET" } = {}) {
+export function request(base, path = "/", { method = "GET", headers } = {}) {
   const origin = new URL(base);
   return new Promise((resolvePromise, reject) => {
     const req = http.request(
       // agent: false —— 每条请求单开连接并主动关闭。
       // Node 19+ 默认 keep-alive，连接会挂 5 秒，测试结束时收服务要空等很久。
-      { host: origin.hostname, port: origin.port, path, method, agent: false },
+      { host: origin.hostname, port: origin.port, path, method, agent: false, ...(headers ? { headers } : {}) },
       (res) => {
         const chunks = [];
         res.on("data", (c) => chunks.push(c));

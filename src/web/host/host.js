@@ -18,6 +18,7 @@ import {
   paintJoinCard,
 } from "../../shared/join-card.js";
 import { C2S, ROLE, S2C } from "../../shared/protocol.js";
+import { TUNNEL_LABEL, TUNNEL_PATHS, TUNNEL_STATE } from "../../shared/tunnel-api.js";
 
 const CLASS_ID = "default"; // 一台服务只上一节课（和学生页同一个约定）
 const MUTE_MINUTES = 5; // 产品文档 §7.3 的「静音5分钟」，是唯一的一档
@@ -48,6 +49,12 @@ const dom = {
   joinNotice: document.getElementById("join-notice"),
   joinWarn: document.getElementById("join-warn"),
   joinNext: document.getElementById("join-next"),
+  tunnel: document.getElementById("tunnel"),
+  tunnelState: document.getElementById("tunnel-state"),
+  tunnelUrl: document.getElementById("tunnel-url"),
+  tunnelMsg: document.getElementById("tunnel-msg"),
+  tunnelToggle: document.getElementById("tunnel-toggle"),
+  tunnelLink: document.getElementById("tunnel-link"),
   pool: document.getElementById("pool"),
   poolEmpty: document.getElementById("pool-empty"),
   done: document.getElementById("done"),
@@ -380,8 +387,9 @@ function renderJoinCard() {
  * 所以它是后台跑的：先让控制台照常可用，地址回来后自己填进去。
  */
 async function loadJoinCard() {
+  let info = null;
   try {
-    const info = await loadServerInfo();
+    info = await loadServerInfo();
     const picker = createAddressPicker(info);
     // best 单独存着：picker.current 会随着「换一个地址」变，但"推荐"始终指首选
     joinCard = Object.assign(picker, {
@@ -389,10 +397,182 @@ async function loadJoinCard() {
       warnings: Array.isArray(info?.warnings) ? info.warnings : [],
     });
   } catch (error) {
-    joinCard = null;
+    // 开公网的那一分钟里这个函数每秒都在跑。某一次失败不该把已经画好的
+    // 二维码抹掉 —— 老师站在讲台上看到二维码突然消失，只会去重连 Wi-Fi。
     console.warn("[host] 查学生地址失败", error?.message ?? error);
   }
   renderJoinCard();
+  renderTunnel(info?.tunnel);
+  return info;
+}
+
+// ── 公网地址（§4.12） ───────────────────────────────────────────────────
+
+/** 上一次画出来的隧道状态。按钮被点击时不用再去问服务端。 */
+let lastTunnel = { available: false };
+/** 有一次操作正在飞。这期间按钮一律置灰，避免连点开出两条隧道。 */
+let tunnelBusy = false;
+/** 轮询用的定时器。同一时间只允许有一个。 */
+let tunnelTimer = null;
+
+/**
+ * 把服务端给的隧道状态画出来。
+ *
+ * `available` 为假表示这次构建里根本没内置穿透程序（开发时没放二进制，
+ * 或者以后把这个功能关掉了）—— 那就整块不显示，而不是摆一个点了没反应的
+ * 按钮让老师以为坏了。
+ */
+function renderTunnel(tunnel) {
+  if (tunnel) lastTunnel = tunnel;
+  const view = lastTunnel;
+
+  dom.tunnel.hidden = !view.available;
+  if (!view.available) return;
+
+  const state = view.state ?? TUNNEL_STATE.OFF;
+  dom.tunnelState.textContent = TUNNEL_LABEL[state] ?? state;
+  dom.tunnelState.dataset.state = state;
+
+  const url = view.publicUrl ?? "";
+  dom.tunnelUrl.textContent = url;
+  dom.tunnelUrl.hidden = url === "";
+
+  dom.tunnelMsg.textContent = view.message ?? "";
+
+  const toggle = dom.tunnelToggle;
+  toggle.disabled = tunnelBusy || state === TUNNEL_STATE.STARTING;
+  toggle.textContent =
+    {
+      [TUNNEL_STATE.ON]: "关公网",
+      [TUNNEL_STATE.STARTING]: "正在开启…",
+      [TUNNEL_STATE.NO_ACCOUNT]: "绑定花生壳账号",
+      [TUNNEL_STATE.ERROR]: "重试",
+    }[state] ?? "开公网";
+}
+
+/** 停掉轮询。每次开新的之前都先停，免得两个定时器抢着改界面。 */
+function stopTunnelPolling() {
+  if (tunnelTimer !== null) {
+    clearInterval(tunnelTimer);
+    tunnelTimer = null;
+  }
+}
+
+/**
+ * 每隔一段时间问一次，直到 `tick()` 说可以停了。
+ *
+ * 用轮询而不是等推送：建隧道和"老师在浏览器里授权"这两件事都发生在 HTTP
+ * 服务之外，服务端没有事件可推；而且它总共也就跑一两分钟。
+ *
+ * 这里刻意用 `tunnelTimer === id` 判断再清：`tick()` 里可能会接着开下一个
+ * 轮询（授权成功 → 接着建隧道），不判断的话外层收尾会把新定时器一起清掉。
+ */
+function pollEvery(tick, { intervalMs = 1500, tries = 40 } = {}) {
+  stopTunnelPolling();
+  let left = tries;
+  const id = setInterval(async () => {
+    left -= 1;
+    let done = false;
+    try {
+      done = await tick();
+    } catch (error) {
+      console.warn("[host] 轮询公网状态出错", error?.message ?? error);
+    }
+    if ((done || left <= 0) && tunnelTimer === id) stopTunnelPolling();
+  }, intervalMs);
+  tunnelTimer = id;
+}
+
+/** 建隧道要十几秒，服务端不等它建完就返回了，所以这里自己盯到出结果。 */
+function pollTunnelReady() {
+  pollEvery(async () => {
+    const info = await loadJoinCard();
+    return info?.tunnel?.state !== TUNNEL_STATE.STARTING;
+  });
+}
+
+async function tunnelAction(path) {
+  const res = await fetch(path, { method: "POST" });
+  const body = await res.json().catch(() => null);
+  if (!body) throw new Error(`服务端返回了 ${res.status}`);
+  return body;
+}
+
+/** 只读地看一眼状态，顺便带上账号（`?account=1` 会起子进程，别拿它当心跳）。 */
+async function tunnelStatus() {
+  const res = await fetch(`${TUNNEL_PATHS.status}?account=1`);
+  return res.ok ? res.json() : null;
+}
+
+/**
+ * 起一次授权，把老师送到花生壳的登录页，回来后自动接着把公网开起来。
+ *
+ * 老师点「绑定花生壳账号」的本意是"把公网开起来"，所以授权完成后不该让他
+ * 回来再点一次「开公网」—— 这里授权一通过就自己往下走。
+ */
+async function beginTunnelLogin() {
+  // 授权链接要等一轮请求才回来，那时候已经不在用户手势里了，再 window.open
+  // 会被浏览器当弹窗拦掉。所以先同步开一个空窗口，拿到地址再往里填。
+  const win = window.open("", "_blank");
+  const body = await tunnelAction(TUNNEL_PATHS.login);
+  if (!body.ok || !body.authorizeUrl) {
+    win?.close();
+    dom.tunnelMsg.textContent = body.message ?? "没能拿到授权链接，过一会儿再试。";
+    return;
+  }
+
+  // 弹窗被拦掉时的兜底：老师端经常是在手机上打开的，那里 window.open 基本必拦
+  dom.tunnelLink.href = body.authorizeUrl;
+  dom.tunnelLink.hidden = false;
+  if (win) win.location = body.authorizeUrl;
+  dom.tunnelMsg.textContent = "在打开的页面里登录花生壳账号，完成后这里会自动继续。";
+
+  pollEvery(
+    async () => {
+      const status = await tunnelStatus();
+      if (!status?.account?.authenticated) return false;
+      dom.tunnelLink.hidden = true;
+      dom.tunnelMsg.textContent = "账号已绑定，正在开公网…";
+      const started = await tunnelAction(TUNNEL_PATHS.start);
+      await loadJoinCard();
+      if (started.tunnel?.state === TUNNEL_STATE.STARTING) pollTunnelReady();
+      return true;
+    },
+    { intervalMs: 2500, tries: 72 },
+  );
+}
+
+/**
+ * 这次点击要干什么，由**当前状态**决定，而不是按钮上写着什么。
+ *
+ * 同一条路（"把公网开起来"）上有三种处境：没账号要先去绑、没开、开失败了
+ * 要重试。它们长在同一个按钮上，是因为对老师来说这本来就是一件事。
+ */
+async function onTunnelToggle() {
+  const state = dom.tunnelState.dataset.state ?? TUNNEL_STATE.OFF;
+
+  tunnelBusy = true;
+  renderTunnel();
+  try {
+    if (state === TUNNEL_STATE.ON) {
+      stopTunnelPolling();
+      await tunnelAction(TUNNEL_PATHS.stop);
+      await loadJoinCard();
+      return;
+    }
+    if (state === TUNNEL_STATE.NO_ACCOUNT) {
+      await beginTunnelLogin();
+      return;
+    }
+    const body = await tunnelAction(TUNNEL_PATHS.start);
+    await loadJoinCard();
+    if (body.tunnel?.state === TUNNEL_STATE.STARTING) pollTunnelReady();
+  } catch (error) {
+    dom.tunnelMsg.textContent = `操作失败：${error?.message ?? error}`;
+  } finally {
+    tunnelBusy = false;
+    renderTunnel();
+  }
 }
 
 // ── 参数滑块 ────────────────────────────────────────────────────────────
@@ -498,6 +678,19 @@ dom.joinNext.addEventListener("click", () => {
   joinCard?.next();
   renderJoinCard();
 });
+
+// 公网那个按钮是一个"一键"：按钮上写什么由当前状态决定（见 onTunnelToggle）
+dom.tunnelToggle.addEventListener("click", () => {
+  onTunnelToggle();
+});
+
+/**
+ * 离开页面时把轮询停掉。
+ *
+ * 不停的话定时器会跟着 bfcache 一起活下来，老师用返回键回到这一页时会发现
+ * 有两个定时器在同时刷界面。
+ */
+window.addEventListener("pagehide", () => stopTunnelPolling());
 
 function render() {
   renderPool();

@@ -64,6 +64,17 @@ export function redirectTo(location) {
   };
 }
 
+/**
+ * 405 + `Allow` 头。
+ *
+ * 由**函数路由自己**调用：一个路由允许哪些动词只有它自己知道（`/api/info`
+ * 是只读的 GET，而 `/api/tunnel/start` 会改状态、必须是 POST）。静态文件那
+ * 侧的 405 仍然由 `handle` 统一发。
+ */
+export function methodNotAllowed(res, allow = "GET, HEAD") {
+  sendText(res, 405, "405 Method Not Allowed", { Allow: allow });
+}
+
 async function statOf(filePath) {
   try {
     return await stat(filePath);
@@ -177,11 +188,6 @@ export function createHttpServer(options = {}) {
   }
 
   const handle = async (req, res) => {
-    if (req.method !== "GET" && req.method !== "HEAD") {
-      sendText(res, 405, "405 Method Not Allowed", { Allow: "GET, HEAD" });
-      return;
-    }
-
     const raw = req.url ?? "/";
     const hashAt = raw.indexOf("#");
     const withoutHash = hashAt === -1 ? raw : raw.slice(0, hashAt);
@@ -191,8 +197,15 @@ export function createHttpServer(options = {}) {
 
     const route = routes[urlPath] ?? routes[urlPath.replace(/\/+$/, "") || "/"];
 
+    // 函数路由**自己决定接不接受这个动词**（见 methodNotAllowed 的注释）。
+    // 静态文件永远是只读的，所以下面还是 GET/HEAD 一把闸。
     if (typeof route === "function") {
       await route(req, res);
+      return;
+    }
+
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      methodNotAllowed(res);
       return;
     }
 

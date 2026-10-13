@@ -437,3 +437,58 @@ body {
   color: var(--warn);
   font-size: 13px;
 }
+
+/* ── 公网地址（§4.12） ─────────────────────────────────── */
+
+/*
+ * 用一条虚线跟上面的扫码卡片分开：上面是"怎么让学生进来"，这里是
+ * "内网进不来时的备用通道"，两件事的默认状态不一样（一个常开，一个默认关）。
+ */
+.tunnel {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.tunnel-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tunnel-state {
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* 状态是这里唯一的信息量，所以让它自己带颜色，不用老师去读文字 */
+.tunnel-state[data-state="on"] {
+  color: var(--accent);
+}
+
+.tunnel-state[data-state="starting"] {
+  color: var(--accent);
+}
+
+.tunnel-state[data-state="error"],
+.tunnel-state[data-state="no_account"] {
+  color: var(--warn);
+}
+
+.tunnel-url {
+  margin-top: 6px;
+}
+
+.tunnel .row {
+  margin-top: 8px;
+}
+
+/* 授权链接是"弹窗被拦了"的兜底，所以它得长得像个能点的东西 */
+.tunnel a.link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}

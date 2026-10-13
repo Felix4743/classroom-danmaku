@@ -52,6 +52,10 @@
       {
         "from": "src/web",
         "to": "src/web"
+      },
+      {
+        "from": "vendor/hsk",
+        "to": "hsk"
       }
     ],
     "win": {

@@ -116,7 +116,10 @@ export function describeChoice(choice, options = {}) {
   if (choice.hotspot) bits.push("电脑热点");
   else if (choice.name) bits.push(choice.name);
   if (showAddress) bits.push(choice.address);
-  if (choice.scope && choice.scope !== "lan") bits.push("不是局域网地址，学生多半连不上");
+  // 公网地址恰好是上面那句话的反面：它是**唯一**一个手机在流量上也能连的地址，
+  // 说它"学生多半连不上"会把老师往错的方向推（他会去关掉公网找内网地址）。
+  if (choice.public) bits.push("手机用流量也能连");
+  else if (choice.scope && choice.scope !== "lan") bits.push("不是局域网地址，学生多半连不上");
   return bits.join(" · ");
 }
 
@@ -136,6 +139,15 @@ export const NO_ADDRESS_HINT = "没查到能给学生用的地址，请在电脑
 export const LAN_NOTICE = "学生手机要连和这台电脑同一个 Wi-Fi（手机流量打不开这个地址）";
 
 /**
+ * 二维码里装的**是公网地址**时改说这句（§4.12）。
+ *
+ * 这时候「要连同一个 Wi-Fi」不但没必要，还会误导：老师刚花了一次授权把公网
+ * 开起来，图的就是"学生用流量也能进来"。所以换一句把这件好处说出来，顺带
+ * 提一句它比内网慢 —— 现场卡顿的时候老师能立刻对上原因。
+ */
+export const WAN_NOTICE = "手机用流量也能连（走公网中转，比内网直连慢一点）";
+
+/**
  * 二维码和地址要有地方画、有地方写。用户节点一律"给就给、没给就跳过"，
  * 这样老师端和投影页可以只挂自己需要的部分。
  *
@@ -147,7 +159,8 @@ export function paintJoinCard(target, choice, options = {}) {
 
   // 联络方式那句和有没有二维码无关：一个地址都没查到的时候，学生更得知道
   // "要连同一个网"，否则他们会一直怀疑是自己手机的问题。
-  if (noticeText) noticeText.textContent = LAN_NOTICE;
+  // 挂的是公网地址时反过来 —— 那句"要连同一个 Wi-Fi"会跟老师刚开好的公网打架。
+  if (noticeText) noticeText.textContent = choice?.public ? WAN_NOTICE : LAN_NOTICE;
 
   if (!choice?.studentUrl) {
     if (canvas) clearCanvas(canvas);

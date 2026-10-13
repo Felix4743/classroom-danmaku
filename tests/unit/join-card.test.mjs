@@ -13,6 +13,7 @@ import {
   AUTO_HIDE_MS,
   LAN_NOTICE,
   NO_ADDRESS_HINT,
+  WAN_NOTICE,
   addressChoices,
   createAddressPicker,
   describeChoice,
@@ -36,6 +37,22 @@ function fakeCanvas(width = 176, height = 176) {
 /** 一条服务端候选地址（形状见 src/main/netinfo.js 的 collectCandidates）。 */
 function lanCandidate(address, name = "WLAN", extra = {}) {
   return { name, address, scope: "lan", score: 30, url: `http://${address}:3000/`, studentUrl: `http://${address}:3000/m`, ...extra };
+}
+
+/** 公网候选（形状见 src/main/netinfo.js 的 publicCandidate）。 */
+function wanCandidate(host = "abc.hz-1.aicp.space", extra = {}) {
+  const base = `https://${host}`;
+  return {
+    name: "公网（花生壳）",
+    address: host,
+    scope: "wan",
+    hotspot: false,
+    public: true,
+    score: 200,
+    url: `${base}/`,
+    studentUrl: `${base}/m`,
+    ...extra,
+  };
 }
 
 describe("loadServerInfo", () => {
@@ -234,6 +251,55 @@ describe("paintJoinCard", () => {
     assert.doesNotThrow(() => paintJoinCard({}, lanCandidate("10.0.0.5")));
     assert.doesNotThrow(() => paintJoinCard(undefined, null));
     assert.doesNotThrow(() => paintJoinCard({ canvas: { width: 8, height: 8 } }, null));
+  });
+});
+
+describe("公网地址（§4.11）", () => {
+  test("说明里说「手机用流量也能连」，绝不说「多半连不上」", () => {
+    const wan = wanCandidate();
+    const text = describeChoice(wan, { best: wan });
+    assert.match(text, /手机用流量也能连/);
+    assert.doesNotMatch(text, /多半连不上/);
+    assert.match(text, /公网（花生壳）/);
+  });
+
+  test("推荐标记照旧：公网排第一时它就是首选", () => {
+    const wan = wanCandidate();
+    assert.match(describeChoice(wan, { best: wan }), /^推荐/);
+  });
+
+  test("二维码换成公网地址，下面那句从「同一个 Wi-Fi」换成「流量也能连」", () => {
+    const qr = fakeCanvas();
+    const target = { canvas: qr.canvas, urlText: { textContent: "" }, hintText: { textContent: "" }, noticeText: { textContent: "" } };
+    const wan = wanCandidate();
+
+    paintJoinCard(target, wan, { best: wan });
+
+    assert.equal(target.urlText.textContent, "https://abc.hz-1.aicp.space/m");
+    assert.equal(target.noticeText.textContent, WAN_NOTICE);
+    assert.notEqual(target.noticeText.textContent, LAN_NOTICE);
+    assert.ok(qr.calls.length > 100, `只画了 ${qr.calls.length} 笔`);
+  });
+
+  // 内网地址那条老规矩不能被顺手改掉：现场实测踩过，二维码没错但学生连不上
+  test("内网地址仍然说「同一个 Wi-Fi」", () => {
+    const target = { noticeText: { textContent: "" } };
+    paintJoinCard(target, lanCandidate("10.0.0.5"));
+    assert.equal(target.noticeText.textContent, LAN_NOTICE);
+  });
+
+  test("关掉公网后又回到「同一个 Wi-Fi」", () => {
+    const target = { noticeText: { textContent: "" } };
+    paintJoinCard(target, wanCandidate());
+    assert.equal(target.noticeText.textContent, WAN_NOTICE);
+    paintJoinCard(target, lanCandidate("10.0.0.5"));
+    assert.equal(target.noticeText.textContent, LAN_NOTICE);
+  });
+
+  test("WAN_NOTICE 要说出「流量」这个好处，别写成第二个 Wi-Fi 警告", () => {
+    assert.match(WAN_NOTICE, /流量/);
+    assert.doesNotMatch(WAN_NOTICE, /同一个 ?Wi-?Fi/);
+    assert.ok(WAN_NOTICE.length >= 12, "太短了，讲台上没人看得懂");
   });
 });
 

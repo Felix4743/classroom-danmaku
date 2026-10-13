@@ -293,6 +293,11 @@ function menuTemplate(classroom) {
     { type: "separator" },
     ...firewallMenuItems(classroom.port),
     { label: `学生地址：${classroom.studentUrl ?? "见 /api/info"}`, enabled: false },
+    // 公网开着的时候把地址也摆出来：老师端页面上有二维码，但托盘是老师
+    // 随手就能瞟一眼的地方，地址对不对一眼就能看明白
+    ...(classroom.tunnel?.getState().publicUrl
+      ? [{ label: `公网地址：${classroom.tunnel.getState().publicUrl}`, enabled: false }]
+      : []),
     { label: "打开数据目录", click: () => shell.openPath(classroom.store?.dir ?? "") },
     { type: "separator" },
     { label: "退出（Ctrl+Alt+Q）", click: () => quit() },
@@ -337,6 +342,23 @@ async function main() {
     dataDir,
     // 防火墙没放行时说给老师听（老师端和投影页都会读到这条）
     getExtraWarnings: firewallWarnings,
+    /*
+     * 公网隧道（§4.12）。
+     *
+     * 二进制的位置只有这里知道：打包后它在 `resources/hsk/` 下，开发时在
+     * `vendor/hsk/` 下，而 `~/.hsk/bin/` 是老师自己装过 hsk-cli 才会有的。
+     * 端口不在这里传 —— 3000 被占用时会递增，只有 `startClassroom` 知道
+     * 最后真正监听的是哪个，所以由它把 `getPort` 接上去。
+     */
+    tunnelOptions: {
+      resourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
+      homeDir: app.getPath("home"),
+      logger: console,
+      // 隧道状态一变就重刷托盘。`state.refreshTray` 这会儿还没设上，
+      // 但托盘紧接着就会建，所以这里用一个延迟取值而不是直接传函数引用
+      onChange: () => state.refreshTray?.(),
+    },
   });
   state.classroom = classroom;
   console.log(`[main] 课堂服务：${classroom.url}（监听端口 ${classroom.port}）`);

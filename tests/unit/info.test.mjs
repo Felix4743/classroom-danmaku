@@ -88,6 +88,97 @@ test("infoPayload", async (t) => {
   });
 });
 
+test("infoPayload 与公网隧道", async (t) => {
+  const tunnelOn = { state: "on", publicUrl: "https://5db4e2ac62dc.hz-1.aicp.space", expiresAt: "2026-10-14T09:59:40+08:00" };
+
+  await t.test("没开这个功能时 available 是 false —— 老师端整块不显示", () => {
+    const info = infoPayload({ interfaces: fakeInterfaces(), port: 3000 });
+    assert.equal(info.tunnel.available, false);
+    assert.equal(info.tunnel.state, "off");
+    assert.equal(info.tunnel.publicUrl, null);
+  });
+
+  await t.test("隧道开着：公网地址排第一，网卡地址留着当备选", () => {
+    const info = infoPayload({ interfaces: fakeInterfaces(), port: 3000, tunnel: tunnelOn });
+    assert.equal(info.tunnel.available, true);
+    assert.equal(info.tunnel.state, "on");
+    assert.equal(info.best.address, "5db4e2ac62dc.hz-1.aicp.space");
+    assert.equal(info.best.studentUrl, "https://5db4e2ac62dc.hz-1.aicp.space/m");
+    assert.equal(info.best.scope, "wan");
+    assert.equal(info.best.public, true);
+    // 「换一个地址」还得能换回局域网
+    assert.equal(info.candidates[1].address, "10.109.12.63");
+    assert.equal(info.candidates[1].studentUrl, "http://10.109.12.63:3000/m");
+  });
+
+  await t.test("公网地址不带端口 —— 端口藏在隧道后面，带上就是错的", () => {
+    const info = infoPayload({ interfaces: fakeInterfaces(), port: 3210, tunnel: tunnelOn });
+    assert.ok(!info.best.studentUrl.includes("3210"));
+    assert.equal(info.best.studentUrl, "https://5db4e2ac62dc.hz-1.aicp.space/m");
+  });
+
+  await t.test("这张机器一张网卡都没有时，公网地址仍然是可用的 best", () => {
+    const info = infoPayload({
+      interfaces: { "vEthernet (WSL)": [{ family: "IPv4", address: "172.24.96.1", internal: false }] },
+      port: 3000,
+      tunnel: tunnelOn,
+    });
+    assert.equal(info.best.studentUrl, "https://5db4e2ac62dc.hz-1.aicp.space/m");
+    assert.deepEqual(info.candidates.filter((c) => !c.public), []);
+  });
+
+  await t.test("隧道开不起来时，原因进 warnings 而不是被吞掉", () => {
+    const info = infoPayload({
+      interfaces: fakeInterfaces(),
+      port: 3000,
+      tunnel: { state: "error", message: "穿透程序 45 秒内没给出公网地址" },
+    });
+    assert.equal(info.best.address, "10.109.12.63");
+    assert.match(info.warnings.join("\n"), /公网地址没开起来.*45 秒/);
+  });
+
+  await t.test("还没绑账号时也提醒老师", () => {
+    const info = infoPayload({
+      interfaces: fakeInterfaces(),
+      port: 3000,
+      tunnel: { state: "no_account", message: "还没绑定花生壳账号" },
+    });
+    assert.match(info.warnings.join("\n"), /还没绑定花生壳账号/);
+  });
+
+  await t.test("隧道给的字段缺斤少两也不会漏到页面上", () => {
+    const info = infoPayload({ interfaces: fakeInterfaces(), port: 3000, tunnel: { state: "on" } });
+    assert.equal(info.tunnel.publicUrl, null);
+    assert.equal(info.tunnel.expiresAt, null);
+    assert.equal(info.tunnel.message, null);
+    // publicUrl 是 null 就不该凭空多出一个候选
+    assert.equal(info.best.address, "10.109.12.63");
+  });
+
+  await t.test("getTunnel 每次请求都被现问一次 —— 隧道状态随时会变", async () => {
+    const dir = { tunnel: null };
+    const started = await serve(t, {
+      routes: {
+        "/api/info": createInfoRoute({
+          getPort: () => 3000,
+          interfaces: fakeInterfaces(),
+          getTunnel: () => dir.tunnel,
+          logger: { error() {} },
+        }),
+      },
+    });
+
+    const before = await request(started.url, "/api/info");
+    assert.equal(JSON.parse(before.body).tunnel.available, false);
+
+    dir.tunnel = tunnelOn;
+    const after = await request(started.url, "/api/info");
+    const body = JSON.parse(after.body);
+    assert.equal(body.tunnel.available, true);
+    assert.equal(body.best.studentUrl, "https://5db4e2ac62dc.hz-1.aicp.space/m");
+  });
+});
+
 test("createInfoRoute", async (t) => {
   await t.test("缺 getPort 当场报错，不等到请求时才炸", () => {
     assert.throws(() => createInfoRoute({}), /getPort/);

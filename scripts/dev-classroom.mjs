@@ -7,6 +7,7 @@
  * 把候选地址都打出来（§4.10）。
  */
 
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +24,14 @@ const classroom = await startClassroom({
   // 和真实交付一样落盘（§4.11）：每 30 秒 + 老师导出时写一份到 data/。
   // 开发期就打开，是为了让"导出按钮点了没反应"这类问题在讲台上出现之前先暴露
   dataDir: process.env.DATA_DIR ?? join(ROOT, "data"),
+  // 公网开关也照 Electron 那边的接法接上（§4.11）。**不接的话开发时
+  // `/api/info` 里 `tunnel.available` 是 false，老师端那一整块是隐藏的**，
+  // 这个功能就只能在打包之后才试得出来。
+  tunnelOptions: {
+    appPath: ROOT,
+    homeDir: homedir(),
+    logger: console,
+  },
 });
 
 const { best, candidates, warnings } = pickAddress(undefined, { port: classroom.port });

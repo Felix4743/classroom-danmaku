@@ -16,7 +16,9 @@ import { createSession } from "./session.js";
 import { homePage, pageMounts } from "./routes.js";
 import { redirectTo, startHttpServer } from "./http.js";
 import { createInfoRoute, DEFAULT_STUDENT_PATH } from "./info.js";
+import { createTunnelRoutes } from "./tunnel-routes.js";
 import { createStore, renderMarkdown, sessionFileName } from "../store.js";
+import { createTunnelManager } from "../tunnel.js";
 
 /** 连接被踢掉时给对端的关闭码：1008 = policy violation，"你不该在这儿"。 */
 export const KICK_CLOSE_CODE = 1008;
@@ -66,6 +68,16 @@ export async function startClassroom(options = {}) {
      * 做成取值函数而不是数组：防火墙自检要两三秒，老师打开老师端时它可能还没回来。
      */
     getExtraWarnings = () => [],
+    /**
+     * 公网隧道。两种给法：
+     *   - `tunnel`：一个现成的管理器。Electron 入口用这种，因为只有它知道
+     *     安装目录（`process.resourcesPath`），二进制在哪是它的事。
+     *   - `tunnelOptions`：只给参数，由这里建。dev 脚本和测试用这种。
+     * 两个都不给就是**不开这个功能**：`/api/tunnel/*` 不注册，老师端页面上
+     * 那一块整个不显示。
+     */
+    tunnel = null,
+    tunnelOptions = null,
   } = options;
 
   if (!staticRoot) throw new TypeError("startClassroom 需要 staticRoot（通常是 src/）");
@@ -76,6 +88,11 @@ export async function startClassroom(options = {}) {
   // 而路由必须在这之前注册好 —— 所以用一个取值函数把两边接起来
   const state = { port };
   const studentPath = pages.includes(DEFAULT_STUDENT_PATH) ? DEFAULT_STUDENT_PATH : null;
+
+  // 隧道管理器在路由注册之前就要有：`/api/info` 和 `/api/tunnel/*` 都要读它。
+  // 端口用取值函数传，理由和 `getPort` 一样 —— 3000 被占用时会递增。
+  const tunnelManager =
+    tunnel ?? (tunnelOptions ? createTunnelManager({ logger, ...tunnelOptions, getPort: () => state.port }) : null);
 
   const http = await startHttpServer({
     port,
@@ -94,8 +111,10 @@ export async function startClassroom(options = {}) {
         interfaces,
         logger,
         getExtraWarnings,
+        getTunnel: () => tunnelManager?.getState() ?? null,
         ...(clock ? { clock } : {}),
       }),
+      ...(tunnelManager ? createTunnelRoutes({ manager: tunnelManager, logger }) : {}),
     },
     logger,
   });
@@ -162,9 +181,14 @@ export async function startClassroom(options = {}) {
     infoPath: "/api/info",
     /** 落盘器。没配 dataDir 时为 null（纯内存）。 */
     store: persistence,
+    /** 公网隧道管理器。没开这个功能时为 null。 */
+    tunnel: tunnelManager,
 
     async close() {
       if (autosaveTimer) clearInterval(autosaveTimer);
+      // 隧道进程必须显式收掉：Windows 上父进程退出不会带走子进程，
+      // 留着它就会一直占着老师账号里的那条映射
+      if (tunnelManager) await tunnelManager.stop();
       hub.close();
       ws.close();
       http.server.closeAllConnections?.();

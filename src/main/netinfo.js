@@ -80,11 +80,62 @@ const PRIVATE_RANGES = [
 ];
 
 export const SCORE = Object.freeze({
+  /**
+   * 公网地址（花生壳隧道）。
+   *
+   * 为什么它比热点还高：热点只解决"学生和老师在同一间教室"，而公网地址
+   * 解决的是"学生根本不在这张网里"—— 手机没连 WiFi、连了但走了流量、
+   * 学校把客户端隔离打开了，这些情况下热点和局域网地址**全都无效**，
+   * 公网地址是唯一还能用的那个。既然老师是主动开隧道的，那就是明确表态
+   * "我要的就是公网这条"，它就该排在二维码的第一位。
+   */
+  PUBLIC: 200,
   HOTSPOT: 120,
   PRIVATE: 100,
   OTHER: 60,
   EXCLUDED: 0,
 });
+
+/** 公网候选在界面上的名字。 */
+export const PUBLIC_NAME = "公网（花生壳）";
+
+/** 从 URL 里取主机名；取不出来就原样返回，至少界面不会显示空白。 */
+export function hostOf(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return String(url ?? "").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  }
+}
+
+/**
+ * 把公网地址包装成一个"候选地址"，好让它和网卡地址走进同一个二维码流程。
+ *
+ * 它不能走 `pageUrl()`：那是 `http://<ip>:<端口><路径>` 的模板，而公网地址
+ * 是 `https://<域名><路径>`，**没有端口、协议也不同**。隧道那边已经把
+ * 本地端口藏在自己身后了，学生地址里再带一个 3000 就是错的。
+ *
+ * @param {object} options
+ * @param {string} [options.publicUrl] 隧道给的公网地址；没有就返回 null
+ * @param {string} [options.studentPath] 学生页路径
+ * @param {string} [options.name] 界面上显示的名字
+ */
+export function publicCandidate({ publicUrl, studentPath = "/m", name = PUBLIC_NAME } = {}) {
+  if (typeof publicUrl !== "string" || publicUrl.trim() === "") return null;
+  const base = publicUrl.trim().replace(/\/+$/, "");
+  return {
+    name,
+    address: hostOf(base),
+    scope: "wan",
+    // 它不是"电脑热点"，但也不是"局域网"。hotspot 保持 false，
+    // 界面靠 scope === "wan" 去说"手机流量也能连"
+    hotspot: false,
+    public: true,
+    score: SCORE.PUBLIC,
+    url: `${base}/`,
+    studentUrl: `${base}${studentPath}`,
+  };
+}
 
 /** 把点分十进制转成 32 位整数。不是合法 IPv4 就返回 null。 */
 export function ipv4ToInt(address) {

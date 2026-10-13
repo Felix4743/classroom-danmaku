@@ -51,6 +51,24 @@
             <button id="join-next" class="link" type="button" hidden>换一个地址</button>
           </div>
         </div>
+
+        <!--
+          公网开关（§4.12）。学生在流量上、或者教室 Wi-Fi 把两台设备隔开的时候，
+          内网地址到不了，这条是唯一的出路。整块默认隐藏，由 /api/info 里
+          `tunnel.available` 决定要不要露出来 —— 没内置穿透程序的构建不该看见它。
+        -->
+        <div id="tunnel" class="tunnel" hidden>
+          <div class="tunnel-head">
+            <span>公网地址</span>
+            <span id="tunnel-state" class="tunnel-state">未开启</span>
+          </div>
+          <p id="tunnel-url" class="join-url tunnel-url" hidden></p>
+          <p id="tunnel-msg" class="note"></p>
+          <div class="row">
+            <button id="tunnel-toggle" class="link" type="button">开公网</button>
+            <a id="tunnel-link" class="link" target="_blank" rel="noopener" hidden>打开授权页面</a>
+          </div>
+        </div>
       </section>
 
       <main class="pool-wrap">
