@@ -33,8 +33,8 @@ const REPORT_TEXT = [
   "ENABLED=True",
   "远程桌面 - 用户模式(TCP-In)\tDomain, Private\t%SystemRoot%\\system32\\svchost.exe\tTCP\t3389",
   "课堂弹幕（学生连接）\tAny\tD:\\课堂弹幕\\课堂弹幕.exe\tTCP\tAny",
-  "课堂弹幕.exe\tPublic\tC:\\Users\\35145\\AppData\\Local\\Temp\\3kaml9fkdtde4ppzoqpem9v0njn\\课堂弹幕.exe\tUDP\tAny",
-  "课堂弹幕.exe\tPublic\tC:\\Users\\35145\\AppData\\Local\\Temp\\3kanmj7q9ytjz4lrshewczr19zj\\课堂弹幕.exe\tTCP\tAny",
+  "课堂弹幕.exe\tPublic\tC:\\Users\\tester\\AppData\\Local\\Temp\\3kaml9fkdtde4ppzoqpem9v0njn\\课堂弹幕.exe\tUDP\tAny",
+  "课堂弹幕.exe\tPublic\tC:\\Users\\tester\\AppData\\Local\\Temp\\3kanmj7q9ytjz4lrshewczr19zj\\课堂弹幕.exe\tTCP\tAny",
   "",
 ].join("\r\n");
 
@@ -113,7 +113,7 @@ test("judgeFirewall：只有指向死路径的规则 -> 必须报出来（这就
   const report = parseFirewallReport(REPORT_TEXT);
   const verdict = judgeFirewall({
     report,
-    exePath: "C:\\Users\\35145\\AppData\\Local\\Temp\\3kbrandnew\\课堂弹幕.exe",
+    exePath: "C:\\Users\\tester\\AppData\\Local\\Temp\\3kbrandnew\\课堂弹幕.exe",
     port: 3000,
   });
   assert.equal(verdict.ok, false);
