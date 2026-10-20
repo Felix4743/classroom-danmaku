@@ -56,6 +56,10 @@
       {
         "from": "vendor/hsk",
         "to": "hsk"
+      },
+      {
+        "from": "deploy/说明.txt",
+        "to": "说明.txt"
       }
     ],
     "win": {
