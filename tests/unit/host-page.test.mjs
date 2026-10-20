@@ -22,14 +22,14 @@ import {
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "src");
 const PAGE = join(SRC, "web", "host");
 
-/** 把页面跑起来，返回元素表与那条连接。 */
-async function boot() {
-  const { elements } = readPage(join(PAGE, "index.html"));
+/** 把页面跑起来，返回元素表、原始 HTML 与那条连接。`options.search` 模拟地址栏查询串。 */
+async function boot(options = {}) {
+  const { elements, html } = readPage(join(PAGE, "index.html"), options);
   installWebSocket();
   await loadPageScript(pathToFileURL(join(PAGE, "host.js")));
   const socket = FakeSocket.instances.at(-1);
   socket.connect();
-  return { els: elements, socket };
+  return { els: elements, html, socket };
 }
 
 /** 发一条完整的弹幕给页面（服务端发的那份形状：带 deviceId）。 */
@@ -229,4 +229,26 @@ test("老师端：导出还没接上时，把服务端的话原样告诉老师",
   });
   assert.equal(els.get("banner").hidden, false);
   assert.match(els.get("banner").textContent, /导出功能还没接上/);
+});
+
+test("老师端：从启动窗进来才报「已启动」（§7.4）", async () => {
+  const { els } = await boot({ search: "?welcome=1" });
+  const welcome = els.get("welcome");
+  assert.equal(welcome.hidden, false, "启动窗里必须让老师看见程序已经开了");
+  // 两句话缺一不可：先回答"开没开"，再回答他最担心的"关掉会不会把课关掉"
+  assert.match(welcome.textContent, /课堂弹幕已启动/);
+  assert.match(welcome.textContent, /关掉这个窗口不影响上课/);
+});
+
+test("老师端：自己用浏览器打开时不该有启动提示", async () => {
+  const { els, html } = await boot();
+  /*
+   * DOM 桩的 `hidden` 永远从 false 起步、根本不看 HTML 属性（见 tests/helpers/dom.mjs），
+   * 所以"默认藏着"这件事得查两个地方：标记里有没有写 hidden，
+   * 以及脚本有没有往里放过字。
+   *
+   * 这一页手机上也要看，所以不能靠"关掉这个窗口"这种只对桌面成立的话糊过去。
+   */
+  assert.match(html, /id="welcome"[^>]*\shidden/, "标记里必须有 hidden 兜底");
+  assert.equal(els.get("welcome").textContent, "", "不带 welcome 时脚本不该写任何字");
 });

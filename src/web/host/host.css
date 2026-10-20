@@ -83,6 +83,28 @@ body {
   touch-action: manipulation;
 }
 
+/*
+ * 启动窗的"我起来了"（技术方案 §7.4）。
+ *
+ * 只在从启动窗进来时出现（见 index.html 里的说明）。它得在一眼之内读完：
+ * 老师此刻的心理状态是"我双击了，到底开没开"，所以第一句回答"开了"，
+ * 第二句立刻回答他最担心的那件事 —— 关掉这个窗口会不会把课关掉。
+ *
+ * 放在 `#alerter` **里面**而不是它前面：`.alerter` 是 `height:100dvh` 的居中
+ * 竖排，放在前面会把整个徽章顶到折线以下。
+ */
+.welcome {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: rgba(76, 141, 255, 0.14);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: center;
+}
+
 /* 有待回应才亮起来：0 个和 3 个必须一眼区分 */
 .badge[data-level="some"] {
   border-color: var(--accent);

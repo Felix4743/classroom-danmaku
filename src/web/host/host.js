@@ -33,6 +33,7 @@ const DONE_LIMIT = 20;
  * （同一个原因：注释里也别写带引号的假 id，正则分不出注释和代码。）
  */
 const dom = {
+  welcome: document.getElementById("welcome"),
   alerter: document.getElementById("alerter"),
   badge: document.getElementById("badge"),
   badgeCount: document.getElementById("badge-count"),
@@ -705,6 +706,22 @@ function render() {
   renderPool();
 }
 
+/**
+ * 启动窗的那句"我起来了"（技术方案 §7.4）。
+ *
+ * 约定是从启动窗打开时带 `?welcome=1`（见 src/main/console-window.js）。
+ * 老师自己用浏览器打开这一页时不该看到它 —— 那时候他本来就知道程序在跑。
+ *
+ * 文案在这里拼、DOM 里那行是空的：写在 HTML 里的占位文字会先闪一下再被覆盖，
+ * 而这一页正好是老师盯着看"到底开没开"的那一秒。
+ */
+function showWelcomeIfFromConsoleWindow() {
+  if (new URLSearchParams(location.search).get("welcome") !== "1") return;
+  dom.welcome.textContent = "课堂弹幕已启动。关掉这个窗口不影响上课。";
+  dom.welcome.hidden = false;
+}
+
+showWelcomeIfFromConsoleWindow();
 buildSliders();
 // 二维码是后台查的，页面不等它（见 loadJoinCard 的说明）
 loadJoinCard();

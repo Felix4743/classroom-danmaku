@@ -20,8 +20,10 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Menu, Tray, app, globalShortcut, nativeImage, shell } from "electron";
+import { BrowserWindow, Menu, Tray, app, globalShortcut, nativeImage, shell } from "electron";
 
+import { maybeAutoStartTunnel } from "./auto-tunnel.js";
+import { consoleWindowOptions, consoleWindowUrl } from "./console-window.js";
 import { hardenConsole, installCrashLog } from "./crash-log.js";
 import { dataDirFor, logDirFor, staticRootFor } from "./desktop-paths.js";
 import { allowRuleArgs, checkFirewall, elevateArgs } from "./firewall.js";
@@ -54,6 +56,13 @@ const state = {
    * 现在打包配置钉死了目录名（根治），这个自检是安全网。
    */
   firewall: null,
+  /**
+   * 启动窗（`src/main/console-window.js`）。`null` = 没开或已经被老师关掉。
+   *
+   * 它**不是**主窗口：关掉它不退出程序，托盘菜单里能再叫回来。所以这里存的是
+   * 一个可以被丢弃的引用，而不是"程序的窗口"。
+   */
+  consoleWin: null,
   quitting: false,
   refreshTray: null,
 };
@@ -253,6 +262,77 @@ function firewallMenuItems(port) {
   ];
 }
 
+/**
+ * 启动窗（技术方案 §7.4）。它是老师双击图标之后唯一的"我起来了"的回应。
+ *
+ * 为什么必须有它：双击之后程序做的两件事**都看不见** —— 起了一个没有窗口的本机
+ * 服务，挂了一层本来就是透明的浮层窗口。剩下的唯一线索是托盘图标，而 Windows
+ * 默认把新图标收进折叠区里。于是"双击了没反应"成了必然的第一印象，哪怕服务
+ * 其实已经起来了。
+ *
+ * 它顺带就是老师端控制台：二维码在最上面，老师一眼就能开始扫码。关掉它不退出
+ * 程序，所以第一次打开时页面会带一条说明（见 `consoleWindowUrl` 的 welcome）。
+ *
+ * 窗口建不出来（极少数会话/显卡问题）不该让老师两手空空 —— 退回浏览器，
+ * 老师要看到的是二维码，用什么看到的不重要。
+ */
+/** "钉到最上层"维持多久。够 Windows 把窗口抬到前台，又短到不会挡着老师讲课。 */
+const BRING_TO_FRONT_HOLD_MS = 600;
+
+/**
+ * 把窗口真正顶到老师眼前。
+ *
+ * 只 `show()` + `focus()` 不够。Windows 有"前台锁"：后台进程新建的窗口往往
+ * 只拿到一个焦点请求的排队权，实际落在当前窗口**后面** —— 老师看到的仍然是
+ * "没反应"，而这恰恰是启动窗要解决的问题。实测就撞上了：窗口标题确实查得到，
+ * 截图里却完全看不见它。
+ *
+ * 先钉到最上层再放开，可以稳定绕过前台锁。放开是必须的，否则它会一直盖住投影。
+ */
+function bringToFront(win) {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.setAlwaysOnTop(true);
+  win.focus();
+  setTimeout(() => {
+    if (!win.isDestroyed()) win.setAlwaysOnTop(false);
+  }, BRING_TO_FRONT_HOLD_MS);
+}
+
+function showConsoleWindow(classroom, options = {}) {
+  const { welcome = false } = options;
+  if (!classroom?.url) return null;
+
+  const existing = state.consoleWin;
+  if (existing && !existing.isDestroyed()) {
+    // 已经开着：那条"关掉不影响上课"只在刚启动时该出现，重复打开时不该再挂上
+    if (welcome) existing.loadURL(consoleWindowUrl(classroom.url, { welcome: true }));
+    bringToFront(existing);
+    return existing;
+  }
+
+  try {
+    // 用托盘那张图：打包后资源目录的位置会变，而这张图是内联的，永远在
+    const win = new BrowserWindow(
+      consoleWindowOptions({ icon: nativeImage.createFromDataURL(TRAY_ICON_DATA_URL) }),
+    );
+    state.consoleWin = win;
+    // 页面自己的 <title> 会顶掉窗口标题，钉住我们写的那一条
+    win.on("page-title-updated", (event) => event.preventDefault());
+    win.on("closed", () => {
+      if (state.consoleWin === win) state.consoleWin = null;
+    });
+    win.loadURL(consoleWindowUrl(classroom.url, { welcome }));
+    bringToFront(win);
+    return win;
+  } catch (error) {
+    console.error("[main] 启动窗没起来，改用浏览器打开老师端", error);
+    shell.openExternal(`${classroom.url}/host/`);
+    return null;
+  }
+}
+
 function menuTemplate(classroom) {
   const base = `${classroom.url}/`;
   const open = (path) => shell.openExternal(`${base}${path}`);
@@ -262,6 +342,8 @@ function menuTemplate(classroom) {
     : "（还没起来）";
 
   return [
+    { label: "显示控制台窗口", click: () => showConsoleWindow(classroom) },
+    { type: "separator" },
     { label: "打开老师端（手机也可以）", click: () => open("host/") },
     { label: "打开投影页（浏览器全屏）", click: () => open("screen/") },
     { label: "打开手感调参页", click: () => open("tune/") },
@@ -310,7 +392,9 @@ function buildTray(classroom) {
   const refresh = () => tray.setContextMenu(Menu.buildFromTemplate(menuTemplate(classroom)));
   refresh();
   state.refreshTray = refresh;
-  tray.on("double-click", () => shell.openExternal(`${classroom.url}/host/`));
+  // 双击托盘 = "再看一眼控制台"。以前这里是直接开浏览器，现在有了启动窗，
+  // 它比浏览器更该被叫回来（关掉它之后老师找不到入口时，第一反应就是双击托盘）
+  tray.on("double-click", () => showConsoleWindow(classroom));
   return tray;
 }
 
@@ -381,6 +465,25 @@ async function main() {
   // 万一探测卡住或者窗口行为异常，托盘是老师唯一的出口，必须先在那儿。
   state.tray = buildTray(classroom);
 
+  /*
+   * 启动窗：老师双击之后唯一的"我起来了"的回应，顺带就是扫码的地方。
+   *
+   * 放在托盘之后、弹幕层之前 —— 弹幕层要连探测一起做，可能耗好几秒，
+   * 而托盘已经在那儿了，所以即使窗口出了什么问题老师也退得出去。
+   */
+  showConsoleWindow(classroom, { welcome: true });
+
+  /*
+   * 已经绑过花生壳账号就直接把公网接上（§4.12）。
+   *
+   * 不 await：建隧道实测要十几秒，等它等于让启动慢一拍。隧道状态本来就会经
+   * `onChange` 刷到托盘和老师端页面上，所以老师看到的是状态自己从"正在连接"
+   * 变成"已连接"，而不是启动时卡一段。
+   */
+  maybeAutoStartTunnel({ tunnel: classroom.tunnel, logger: console }).catch((error) =>
+    console.warn("[main] 自动开公网出错（不影响局域网）", error?.message ?? error),
+  );
+
   if (process.env.CLASSROOM_SKIP_OVERLAY === "1") {
     // 只想验服务、不想被一层全屏弹幕盖住屏幕时用（调服务端、查网卡都能用得上）
     console.log("[main] CLASSROOM_SKIP_OVERLAY=1，跳过弹幕层窗口");
@@ -430,8 +533,12 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    // 老师又双击了一次图标：把老师端拉出来，而不是抱怨
-    shell.openExternal(`${state.classroom?.url ?? ""}/host/`);
+    /*
+     * 老师又双击了一次图标。这几乎总是因为上一次双击"看起来没反应"
+     * （启动窗被他关掉了，或者当时还没画出来），所以第一选择是把启动窗
+     * 叫回前台。建不出来时，`showConsoleWindow` 自己会退回浏览器。
+     */
+    showConsoleWindow(state.classroom);
   });
 
   // 托盘还在的时候，"窗口都关了"不等于该退出。这个事件订阅了就取消默认的

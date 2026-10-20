@@ -16,6 +16,12 @@
       达到阈值时震动一下，其余时间老师不用看它。
     -->
     <section id="alerter" class="alerter">
+      <!--
+        启动窗的"我起来了"（技术方案 §7.4）。只有从启动窗进来才显示
+        （`?welcome=1`，见 src/main/console-window.js）。老师自己在浏览器里
+        打开本页时它一直藏着 —— 那时候他本来就知道程序在跑，多一行字只是噪音。
+      -->
+      <p id="welcome" class="welcome" hidden></p>
       <button id="badge" class="badge" type="button">
         <span id="badge-count" class="badge-count">0</span>
         <span class="badge-text">个待回应</span>
